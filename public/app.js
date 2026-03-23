@@ -183,11 +183,11 @@ async function handleAuth(e) {
         return;
     }
     
-    // Disable submit button to prevent double submission
+    // Disable submit button and add loading state
     const submitBtn = e.target.querySelector('button[type="submit"]');
     const originalText = submitBtn.innerHTML;
     submitBtn.disabled = true;
-    submitBtn.innerHTML = '<i class="fas fa-spinner fa-spin mr-2"></i>Processing...';
+    submitBtn.classList.add('btn-loading');
     
     const endpoint = isLoginMode ? '/api/users/login' : '/api/users/register';
     
@@ -213,9 +213,9 @@ async function handleAuth(e) {
     } catch (error) {
         showNotification('Network error. Please check your connection.', 'error');
     } finally {
-        // Re-enable submit button
+        // Re-enable submit button and remove loading state
         submitBtn.disabled = false;
-        submitBtn.innerHTML = originalText;
+        submitBtn.classList.remove('btn-loading');
     }
 }
 
@@ -240,6 +240,52 @@ function logout() {
     updateUserDisplay();
     showNotification('Logged out successfully', 'info');
     loadAuctions();
+}
+
+// Stellar wallet functions
+let stellarWallet = null;
+
+async function toggleStellarWallet() {
+    const walletBtn = document.getElementById('stellarWalletBtn');
+    const walletInfo = document.getElementById('stellarWalletInfo');
+    const walletAddress = document.getElementById('walletAddress');
+    const walletBalance = document.getElementById('walletBalance');
+    
+    if (stellarWallet) {
+        // Disconnect wallet
+        stellarWallet = null;
+        walletInfo.classList.add('hidden');
+        walletBtn.innerHTML = '<i class="fas fa-wallet mr-2"></i>Connect Wallet';
+        walletBtn.classList.remove('btn-loading');
+        showNotification('Wallet disconnected', 'info');
+    } else {
+        // Connect wallet with loading state
+        walletBtn.classList.add('btn-loading');
+        walletBtn.disabled = true;
+        
+        try {
+            // Simulate wallet connection (replace with actual Stellar wallet integration)
+            await new Promise(resolve => setTimeout(resolve, 2000));
+            
+            // Mock wallet data (replace with actual wallet connection)
+            stellarWallet = {
+                publicKey: 'G' + 'A'.repeat(55), // Mock Stellar address
+                balance: 1000.50
+            };
+            
+            walletAddress.textContent = stellarWallet.publicKey.substring(0, 20) + '...';
+            walletBalance.textContent = `${stellarWallet.balance} XLM`;
+            walletInfo.classList.remove('hidden');
+            walletBtn.innerHTML = '<i class="fas fa-wallet mr-2"></i>Disconnect';
+            
+            showNotification('Wallet connected successfully!', 'success');
+        } catch (error) {
+            showNotification('Failed to connect wallet: ' + error.message, 'error');
+        } finally {
+            walletBtn.classList.remove('btn-loading');
+            walletBtn.disabled = false;
+        }
+    }
 }
 
 // Tab functions
@@ -273,11 +319,15 @@ function showTab(tabName) {
 
 // Auction functions
 async function loadAuctions() {
+    const grid = document.getElementById('auctionsGrid');
+    
+    // Show skeleton loaders while loading
+    showSkeletonLoaders(grid);
+    
     try {
         const response = await fetch('/api/auctions');
         const auctions = await response.json();
         
-        const grid = document.getElementById('auctionsGrid');
         grid.innerHTML = '';
         
         auctions.forEach(auction => {
@@ -285,7 +335,29 @@ async function loadAuctions() {
             grid.appendChild(card);
         });
     } catch (error) {
+        grid.innerHTML = '<div class="col-span-full text-center text-red-400">Failed to load auctions</div>';
         showNotification('Failed to load auctions', 'error');
+    }
+}
+
+// Show skeleton loaders for auction cards
+function showSkeletonLoaders(container) {
+    container.innerHTML = '';
+    
+    // Create 6 skeleton cards
+    for (let i = 0; i < 6; i++) {
+        const skeletonCard = document.createElement('div');
+        skeletonCard.className = 'skeleton-card';
+        skeletonCard.innerHTML = `
+            <div class="skeleton skeleton-text title"></div>
+            <div class="skeleton skeleton-text large"></div>
+            <div class="skeleton skeleton-text"></div>
+            <div class="skeleton skeleton-text small"></div>
+            <div class="skeleton skeleton-text small"></div>
+            <div class="skeleton skeleton-text small"></div>
+            <div class="skeleton skeleton-button"></div>
+        `;
+        container.appendChild(skeletonCard);
     }
 }
 
@@ -374,11 +446,11 @@ async function handleCreateAuction(e) {
         return;
     }
     
-    // Disable submit button to prevent double submission
+    // Disable submit button and add loading state
     const submitBtn = e.target.querySelector('button[type="submit"]');
     const originalText = submitBtn.innerHTML;
     submitBtn.disabled = true;
-    submitBtn.innerHTML = '<i class="fas fa-spinner fa-spin mr-2"></i>Creating...';
+    submitBtn.classList.add('btn-loading');
     
     try {
         const response = await fetch('/api/auctions', {
@@ -408,9 +480,9 @@ async function handleCreateAuction(e) {
     } catch (error) {
         showNotification('Network error. Please check your connection.', 'error');
     } finally {
-        // Re-enable submit button
+        // Re-enable submit button and remove loading state
         submitBtn.disabled = false;
-        submitBtn.innerHTML = originalText;
+        submitBtn.classList.remove('btn-loading');
     }
 }
 
@@ -452,11 +524,11 @@ async function handlePlaceBid(e) {
         return;
     }
     
-    // Disable submit button to prevent double submission
+    // Disable submit button and add loading state
     const submitBtn = e.target.querySelector('button[type="submit"]');
     const originalText = submitBtn.innerHTML;
     submitBtn.disabled = true;
-    submitBtn.innerHTML = '<i class="fas fa-spinner fa-spin mr-2"></i>Placing Bid...';
+    submitBtn.classList.add('btn-loading');
     
     try {
         const response = await fetch('/api/bids', {
@@ -484,9 +556,9 @@ async function handlePlaceBid(e) {
     } catch (error) {
         showNotification('Network error. Please check your connection.', 'error');
     } finally {
-        // Re-enable submit button
+        // Re-enable submit button and remove loading state
         submitBtn.disabled = false;
-        submitBtn.innerHTML = originalText;
+        submitBtn.classList.remove('btn-loading');
     }
 }
 
