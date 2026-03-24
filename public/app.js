@@ -4,11 +4,66 @@ let currentUser = null;
 let currentAuctionId = null;
 let isLoginMode = true;
 
+// Form validation configuration
+const validationRules = {
+    username: {
+        required: true,
+        minLength: 3,
+        maxLength: 20,
+        pattern: /^[a-zA-Z0-9_]+$/,
+        message: 'Username must be 3-20 characters, alphanumeric and underscores only'
+    },
+    password: {
+        required: true,
+        minLength: 6,
+        maxLength: 100,
+        pattern: /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)/,
+        message: 'Password must be 6+ characters with uppercase, lowercase, and number'
+    },
+    auctionTitle: {
+        required: true,
+        minLength: 3,
+        maxLength: 100,
+        message: 'Title must be 3-100 characters'
+    },
+    auctionDescription: {
+        required: true,
+        minLength: 10,
+        maxLength: 1000,
+        message: 'Description must be 10-1000 characters'
+    },
+    startingBid: {
+        required: true,
+        min: 0.01,
+        max: 1000000,
+        message: 'Starting bid must be between $0.01 and $1,000,000'
+    },
+    endTime: {
+        required: true,
+        future: true,
+        message: 'End time must be at least 1 hour in the future'
+    },
+    bidAmount: {
+        required: true,
+        min: 0.01,
+        max: 1000000,
+        message: 'Bid amount must be between $0.01 and $1,000,000'
+    },
+    secretKey: {
+        required: true,
+        minLength: 8,
+        maxLength: 100,
+        pattern: /^[a-zA-Z0-9!@#$%^&*()_+\-=\[\]{};':"\\|,.<>\/?]+$/,
+        message: 'Secret key must be 8-100 characters'
+    }
+};
+
 // Initialize app
 document.addEventListener('DOMContentLoaded', function() {
     loadAuctions();
     setupEventListeners();
     setupSocketListeners();
+    setupRealTimeValidation();
 });
 
 // Socket.io listeners
@@ -77,8 +132,25 @@ function toggleAuthMode() {
 async function handleAuth(e) {
     e.preventDefault();
     
-    const username = document.getElementById('username').value;
-    const password = document.getElementById('password').value;
+    const username = document.getElementById('username');
+    const password = document.getElementById('password');
+    
+    // Clear previous errors
+    clearFieldErrors(['username', 'password']);
+    
+    // Validate fields
+    const usernameError = validateField('username', username.value);
+    const passwordError = validateField('password', password.value);
+    
+    if (usernameError) {
+        showFieldError('username', usernameError);
+        return;
+    }
+    
+    if (passwordError) {
+        showFieldError('password', passwordError);
+        return;
+    }
     
     const endpoint = isLoginMode ? '/api/users/login' : '/api/users/register';
     
@@ -88,7 +160,7 @@ async function handleAuth(e) {
             headers: {
                 'Content-Type': 'application/json'
             },
-            body: JSON.stringify({ username, password })
+            body: JSON.stringify({ username: username.value, password: password.value })
         });
         
         const data = await response.json();
@@ -240,10 +312,39 @@ async function handleCreateAuction(e) {
         return;
     }
     
-    const title = document.getElementById('auctionTitle').value;
-    const description = document.getElementById('auctionDescription').value;
-    const startingBid = parseFloat(document.getElementById('startingBid').value);
-    const endTime = document.getElementById('endTime').value;
+    const title = document.getElementById('auctionTitle');
+    const description = document.getElementById('auctionDescription');
+    const startingBid = document.getElementById('startingBid');
+    const endTime = document.getElementById('endTime');
+    
+    // Clear previous errors
+    clearFieldErrors(['auctionTitle', 'auctionDescription', 'startingBid', 'endTime']);
+    
+    // Validate fields
+    const titleError = validateField('auctionTitle', title.value);
+    const descriptionError = validateField('auctionDescription', description.value);
+    const startingBidError = validateField('startingBid', parseFloat(startingBid.value));
+    const endTimeError = validateField('endTime', endTime.value);
+    
+    if (titleError) {
+        showFieldError('auctionTitle', titleError);
+        return;
+    }
+    
+    if (descriptionError) {
+        showFieldError('auctionDescription', descriptionError);
+        return;
+    }
+    
+    if (startingBidError) {
+        showFieldError('startingBid', startingBidError);
+        return;
+    }
+    
+    if (endTimeError) {
+        showFieldError('endTime', endTimeError);
+        return;
+    }
     
     try {
         const response = await fetch('/api/auctions', {
@@ -252,10 +353,10 @@ async function handleCreateAuction(e) {
                 'Content-Type': 'application/json'
             },
             body: JSON.stringify({
-                title,
-                description,
-                startingBid,
-                endTime,
+                title: title.value,
+                description: description.value,
+                startingBid: parseFloat(startingBid.value),
+                endTime: endTime.value,
                 userId: currentUser.userId
             })
         });
@@ -294,8 +395,25 @@ function closeBidModal() {
 async function handlePlaceBid(e) {
     e.preventDefault();
     
-    const amount = parseFloat(document.getElementById('bidAmount').value);
-    const secretKey = document.getElementById('secretKey').value;
+    const amount = document.getElementById('bidAmount');
+    const secretKey = document.getElementById('secretKey');
+    
+    // Clear previous errors
+    clearFieldErrors(['bidAmount', 'secretKey']);
+    
+    // Validate fields
+    const amountError = validateField('bidAmount', parseFloat(amount.value));
+    const secretKeyError = validateField('secretKey', secretKey.value);
+    
+    if (amountError) {
+        showFieldError('bidAmount', amountError);
+        return;
+    }
+    
+    if (secretKeyError) {
+        showFieldError('secretKey', secretKeyError);
+        return;
+    }
     
     try {
         const response = await fetch('/api/bids', {
@@ -306,8 +424,8 @@ async function handlePlaceBid(e) {
             body: JSON.stringify({
                 auctionId: currentAuctionId,
                 bidderId: currentUser.userId,
-                amount,
-                secretKey
+                amount: parseFloat(amount.value),
+                secretKey: secretKey.value
             })
         });
         
@@ -372,4 +490,206 @@ function showNotification(message, type = 'info') {
     setTimeout(() => {
         notification.remove();
     }, 3000);
+}
+
+// Form validation functions
+function validateField(fieldName, value) {
+    const rules = validationRules[fieldName];
+    if (!rules) return null;
+    
+    // Check if required
+    if (rules.required && (!value || value.toString().trim() === '')) {
+        return 'This field is required';
+    }
+    
+    // Skip other validations if field is empty and not required
+    if (!value || value.toString().trim() === '') {
+        return null;
+    }
+    
+    const stringValue = value.toString();
+    
+    // Check minimum length
+    if (rules.minLength && stringValue.length < rules.minLength) {
+        return rules.message || `Must be at least ${rules.minLength} characters`;
+    }
+    
+    // Check maximum length
+    if (rules.maxLength && stringValue.length > rules.maxLength) {
+        return rules.message || `Must be no more than ${rules.maxLength} characters`;
+    }
+    
+    // Check pattern
+    if (rules.pattern && !rules.pattern.test(stringValue)) {
+        return rules.message || 'Invalid format';
+    }
+    
+    // Check minimum value (for numbers)
+    if (rules.min !== undefined && parseFloat(value) < rules.min) {
+        return rules.message || `Must be at least ${rules.min}`;
+    }
+    
+    // Check maximum value (for numbers)
+    if (rules.max !== undefined && parseFloat(value) > rules.max) {
+        return rules.message || `Must be no more than ${rules.max}`;
+    }
+    
+    // Check future date
+    if (rules.future) {
+        const selectedDate = new Date(value);
+        const now = new Date();
+        const minFutureTime = new Date(now.getTime() + 60 * 60 * 1000); // 1 hour from now
+        
+        if (selectedDate <= minFutureTime) {
+            return rules.message || 'Must be at least 1 hour in the future';
+        }
+    }
+    
+    return null;
+}
+
+function showFieldError(fieldName, errorMessage) {
+    const field = document.getElementById(fieldName);
+    if (!field) return;
+    
+    // Remove existing error
+    clearFieldError(fieldName);
+    
+    // Add error styling to field
+    field.classList.add('border-red-500', 'focus:ring-red-400');
+    field.classList.remove('border-white', 'border-opacity-30', 'focus:ring-purple-400');
+    
+    // Create error message element
+    const errorElement = document.createElement('div');
+    errorElement.id = `${fieldName}Error`;
+    errorElement.className = 'text-red-400 text-sm mt-1 flex items-center';
+    errorElement.innerHTML = `<i class="fas fa-exclamation-circle mr-1"></i>${errorMessage}`;
+    
+    // Insert error message after the field
+    field.parentNode.insertBefore(errorElement, field.nextSibling);
+}
+
+function clearFieldError(fieldName) {
+    const field = document.getElementById(fieldName);
+    const errorElement = document.getElementById(`${fieldName}Error`);
+    
+    if (field) {
+        field.classList.remove('border-red-500', 'focus:ring-red-400');
+        field.classList.add('border-white', 'border-opacity-30', 'focus:ring-purple-400');
+    }
+    
+    if (errorElement) {
+        errorElement.remove();
+    }
+}
+
+function clearFieldErrors(fieldNames) {
+    fieldNames.forEach(fieldName => clearFieldError(fieldName));
+}
+
+// Real-time validation
+function setupRealTimeValidation() {
+    // Username validation
+    const usernameField = document.getElementById('username');
+    if (usernameField) {
+        usernameField.addEventListener('blur', () => {
+            const error = validateField('username', usernameField.value);
+            if (error) {
+                showFieldError('username', error);
+            } else {
+                clearFieldError('username');
+            }
+        });
+    }
+    
+    // Password validation
+    const passwordField = document.getElementById('password');
+    if (passwordField) {
+        passwordField.addEventListener('blur', () => {
+            const error = validateField('password', passwordField.value);
+            if (error) {
+                showFieldError('password', error);
+            } else {
+                clearFieldError('password');
+            }
+        });
+    }
+    
+    // Auction title validation
+    const auctionTitleField = document.getElementById('auctionTitle');
+    if (auctionTitleField) {
+        auctionTitleField.addEventListener('blur', () => {
+            const error = validateField('auctionTitle', auctionTitleField.value);
+            if (error) {
+                showFieldError('auctionTitle', error);
+            } else {
+                clearFieldError('auctionTitle');
+            }
+        });
+    }
+    
+    // Auction description validation
+    const auctionDescField = document.getElementById('auctionDescription');
+    if (auctionDescField) {
+        auctionDescField.addEventListener('blur', () => {
+            const error = validateField('auctionDescription', auctionDescField.value);
+            if (error) {
+                showFieldError('auctionDescription', error);
+            } else {
+                clearFieldError('auctionDescription');
+            }
+        });
+    }
+    
+    // Starting bid validation
+    const startingBidField = document.getElementById('startingBid');
+    if (startingBidField) {
+        startingBidField.addEventListener('blur', () => {
+            const error = validateField('startingBid', parseFloat(startingBidField.value));
+            if (error) {
+                showFieldError('startingBid', error);
+            } else {
+                clearFieldError('startingBid');
+            }
+        });
+    }
+    
+    // End time validation
+    const endTimeField = document.getElementById('endTime');
+    if (endTimeField) {
+        endTimeField.addEventListener('change', () => {
+            const error = validateField('endTime', endTimeField.value);
+            if (error) {
+                showFieldError('endTime', error);
+            } else {
+                clearFieldError('endTime');
+            }
+        });
+    }
+    
+    // Bid amount validation
+    const bidAmountField = document.getElementById('bidAmount');
+    if (bidAmountField) {
+        bidAmountField.addEventListener('blur', () => {
+            const error = validateField('bidAmount', parseFloat(bidAmountField.value));
+            if (error) {
+                showFieldError('bidAmount', error);
+            } else {
+                clearFieldError('bidAmount');
+            }
+        });
+    }
+    
+    // Secret key validation
+    const secretKeyField = document.getElementById('secretKey');
+    if (secretKeyField) {
+        secretKeyField.addEventListener('blur', () => {
+            const error = validateField('secretKey', secretKeyField.value);
+            if (error) {
+                showFieldError('secretKey', error);
+            } else {
+                clearFieldError('secretKey');
+            }
+        });
+    }
 }
