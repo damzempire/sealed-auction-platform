@@ -1,0 +1,339 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Mobile Responsiveness Test - Sealed Auction Platform</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        .gradient-bg {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        }
+        .glass-effect {
+            background: rgba(255, 255, 255, 0.1);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+        }
+        .animate-pulse-slow {
+            animation: pulse 3s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+        }
+        .stellar-gradient {
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%);
+        }
+        .line-clamp-3 {
+            display: -webkit-box;
+            -webkit-line-clamp: 3;
+            -webkit-box-orient: vertical;
+            overflow: hidden;
+            line-clamp: 3;
+            display: -moz-box;
+            -moz-line-clamp: 3;
+            -moz-box-orient: vertical;
+        }
+        @media (max-width: 640px) {
+            .truncate-mobile {
+                overflow: hidden;
+                text-overflow: ellipsis;
+                white-space: nowrap;
+            }
+            .auction-card-mobile {
+                min-height: 280px;
+            }
+            .mobile-overflow-hidden {
+                overflow: hidden;
+            }
+        }
+        @media (max-width: 768px) {
+            .md-flex-col {
+                flex-direction: column;
+            }
+            .md-w-full {
+                width: 100%;
+            }
+        }
+    </style>
+</head>
+<body class="stellar-gradient min-h-screen text-white">
+    <!-- Header -->
+    <header class="glass-effect shadow-lg">
+        <div class="container mx-auto px-4 py-4">
+            <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center space-y-3 sm:space-y-0">
+                <div class="flex items-center space-x-3">
+                    <i class="fas fa-gavel text-xl sm:text-2xl"></i>
+                    <h1 class="text-lg sm:text-2xl font-bold">Stellar Sealed-Bid Auction</h1>
+                    <span class="bg-purple-600 px-2 py-1 rounded text-xs hidden sm:inline">Blockchain</span>
+                </div>
+                <div class="flex items-center space-x-2 sm:space-x-4 w-full sm:w-auto">
+                    <div id="stellarWalletInfo" class="hidden">
+                        <span id="walletAddress" class="text-xs sm:text-sm text-gray-300 truncate max-w-[120px] sm:max-w-none"></span>
+                        <span id="walletBalance" class="text-xs sm:text-sm font-semibold ml-2"></span>
+                    </div>
+                    <button id="stellarWalletBtn" onclick="toggleStellarWallet()" class="bg-purple-600 hover:bg-purple-700 px-3 py-2 sm:px-4 rounded-lg transition text-sm sm:text-base w-full sm:w-auto">
+                        <i class="fas fa-wallet mr-2"></i><span class="hidden sm:inline">Connect Wallet</span><span class="sm:hidden">Wallet</span>
+                    </button>
+                </div>
+            </div>
+        </div>
+    </header>
+
+    <!-- Main Content -->
+    <main class="container mx-auto px-4 py-8">
+        <!-- Test Info -->
+        <div class="glass-effect rounded-xl p-4 mb-8">
+            <h2 class="text-xl font-bold mb-4">Mobile Responsiveness Test</h2>
+            <p class="text-gray-300 mb-2">This page demonstrates the mobile responsiveness fixes implemented:</p>
+            <ul class="list-disc list-inside text-gray-300 space-y-1">
+                <li>Grid layout: <code>grid-cols-1 md:grid-cols-2 lg:grid-cols-3</code></li>
+                <li>Improved spacing: <code>gap-3 sm:gap-4 lg:gap-6</code></li>
+                <li>Better text sizing: <code>text-xs sm:text-sm md:text-base</code></li>
+                <li>Mobile-optimized buttons with truncated text</li>
+                <li>Proper overflow handling for auction cards</li>
+            </ul>
+        </div>
+
+        <!-- Navigation Tabs -->
+        <div class="glass-effect rounded-xl p-1 mb-8">
+            <div class="flex flex-col sm:flex-row space-x-0 sm:space-x-1 space-y-1 sm:space-y-0">
+                <button onclick="showTab('auctions')" id="auctionsTab" class="flex-1 py-2 sm:py-3 px-3 sm:px-4 rounded-lg bg-purple-600 transition text-sm sm:text-base">
+                    <i class="fas fa-list mr-2"></i><span class="hidden sm:inline">Auctions</span><span class="sm:hidden">List</span>
+                </button>
+                <button onclick="showTab('create')" id="createTab" class="flex-1 py-2 sm:py-3 px-3 sm:px-4 rounded-lg hover:bg-purple-500 transition text-sm sm:text-base">
+                    <i class="fas fa-plus mr-2"></i><span class="hidden sm:inline">Create Auction</span><span class="sm:hidden">Create</span>
+                </button>
+                <button onclick="showTab('myBids')" id="myBidsTab" class="flex-1 py-2 sm:py-3 px-3 sm:px-4 rounded-lg hover:bg-purple-500 transition text-sm sm:text-base">
+                    <i class="fas fa-coins mr-2"></i><span class="hidden sm:inline">My Bids</span><span class="sm:hidden">Bids</span>
+                </button>
+            </div>
+        </div>
+
+        <!-- Auctions Tab -->
+        <div id="auctionsContent" class="tab-content">
+            <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 sm:gap-4 lg:gap-6" id="auctionsGrid">
+                <!-- Sample Auction Cards -->
+            </div>
+        </div>
+
+        <!-- Create Auction Tab -->
+        <div id="createContent" class="tab-content hidden">
+            <div class="glass-effect rounded-xl p-3 sm:p-4 lg:p-6 max-w-full sm:max-w-2xl mx-auto">
+                <h2 class="text-xl sm:text-2xl font-bold mb-6">Create New Auction</h2>
+                <form class="space-y-4 sm:space-y-6">
+                    <div>
+                        <label class="block text-sm font-medium mb-2">Title</label>
+                        <input type="text" class="w-full px-3 sm:px-4 py-2 rounded-lg bg-white bg-opacity-20 border border-white border-opacity-30 focus:outline-none focus:ring-2 focus:ring-purple-400 text-sm sm:text-base" required>
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium mb-2">Description</label>
+                        <textarea rows="4" class="w-full px-3 sm:px-4 py-2 rounded-lg bg-white bg-opacity-20 border border-white border-opacity-30 focus:outline-none focus:ring-2 focus:ring-purple-400 text-sm sm:text-base" required></textarea>
+                    </div>
+                    <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                        <div>
+                            <label class="block text-sm font-medium mb-2">Starting Bid ($)</label>
+                            <input type="number" min="0" step="0.01" class="w-full px-3 sm:px-4 py-2 rounded-lg bg-white bg-opacity-20 border border-white border-opacity-30 focus:outline-none focus:ring-2 focus:ring-purple-400 text-sm sm:text-base" required>
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium mb-2">End Time</label>
+                            <input type="datetime-local" class="w-full px-3 sm:px-4 py-2 rounded-lg bg-white bg-opacity-20 border border-white border-opacity-30 focus:outline-none focus:ring-2 focus:ring-purple-400 text-sm sm:text-base" required>
+                        </div>
+                    </div>
+                    <button type="submit" class="w-full bg-purple-600 hover:bg-purple-700 py-2 sm:py-3 rounded-lg transition font-semibold text-sm sm:text-base">
+                        <i class="fas fa-gavel mr-2"></i>Create Auction
+                    </button>
+                </form>
+            </div>
+        </div>
+
+        <!-- My Bids Tab -->
+        <div id="myBidsContent" class="tab-content hidden">
+            <div class="glass-effect rounded-xl p-3 sm:p-4 lg:p-6">
+                <h2 class="text-xl sm:text-2xl font-bold mb-4 sm:mb-6">Your Bids</h2>
+                <div id="myBidsList" class="space-y-2 sm:space-y-3 lg:space-y-4">
+                    <!-- Sample bid items -->
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <script>
+        // Sample auction data for testing
+        const sampleAuctions = [
+            {
+                id: '1',
+                title: 'Vintage Camera Collection',
+                description: 'Rare vintage cameras from the 1950s including Leica, Nikon, and Canon models. All in excellent working condition with original accessories.',
+                startingBid: 500.00,
+                currentHighestBid: 750.00,
+                bidCount: 12,
+                endTime: new Date(Date.now() + 86400000 * 2), // 2 days from now
+                status: 'active',
+                winner: null
+            },
+            {
+                id: '2',
+                title: 'Modern Art Painting',
+                description: 'Original abstract painting by emerging artist. Mixed media on canvas, 36x48 inches. Vibrant colors perfect for contemporary spaces.',
+                startingBid: 1200.00,
+                currentHighestBid: 1500.00,
+                bidCount: 8,
+                endTime: new Date(Date.now() + 86400000), // 1 day from now
+                status: 'active',
+                winner: null
+            },
+            {
+                id: '3',
+                title: 'Antique Pocket Watch',
+                description: '19th century gold pocket watch with intricate engravings. Working condition with original chain and presentation box.',
+                startingBid: 800.00,
+                currentHighestBid: 950.00,
+                bidCount: 6,
+                endTime: new Date(Date.now() + 86400000 * 3), // 3 days from now
+                status: 'active',
+                winner: null
+            },
+            {
+                id: '4',
+                title: 'Rare Book Collection',
+                description: 'First edition classics including works by Shakespeare, Dickens, and Austen. All books in good condition with protective covers.',
+                startingBid: 300.00,
+                currentHighestBid: 450.00,
+                bidCount: 15,
+                endTime: new Date(Date.now() + 86400000 * 4), // 4 days from now
+                status: 'active',
+                winner: null
+            },
+            {
+                id: '5',
+                title: 'Designer Handbag',
+                description: 'Authentic designer handbag from latest collection. Brand new with tags and dust bag. Certificate of authenticity included.',
+                startingBid: 2000.00,
+                currentHighestBid: 2500.00,
+                bidCount: 10,
+                endTime: new Date(Date.now() + 86400000 * 5), // 5 days from now
+                status: 'active',
+                winner: null
+            },
+            {
+                id: '6',
+                title: 'Vintage Guitar',
+                description: '1960s electric guitar with original case. Well-maintained instrument with rich tone and excellent playability.',
+                startingBid: 1500.00,
+                currentHighestBid: 1800.00,
+                bidCount: 7,
+                endTime: new Date(Date.now() + 86400000 * 6), // 6 days from now
+                status: 'active',
+                winner: null
+            }
+        ];
+
+        function createAuctionCard(auction) {
+            const card = document.createElement('div');
+            card.className = 'glass-effect rounded-xl p-3 sm:p-4 md:p-6 hover:transform hover:scale-105 transition auction-card-mobile mobile-overflow-hidden';
+            
+            const endTime = new Date(auction.endTime);
+            const now = new Date();
+            const isExpired = endTime <= now;
+            const statusColor = auction.status === 'active' && !isExpired ? 'green' : 'red';
+            
+            card.innerHTML = `
+                <div class="flex flex-col sm:flex-row sm:justify-between sm:items-start mb-3 sm:mb-4 space-y-2 sm:space-y-0">
+                    <h3 class="text-base sm:text-lg md:text-xl font-bold truncate flex-1 pr-2">${auction.title}</h3>
+                    <span class="px-2 py-1 rounded text-xs bg-${statusColor}-500 bg-opacity-30 border border-${statusColor}-500 flex-shrink-0">
+                        ${auction.status}
+                    </span>
+                </div>
+                <p class="text-gray-300 mb-3 sm:mb-4 text-xs sm:text-sm md:text-base line-clamp-3">${auction.description}</p>
+                <div class="space-y-1 sm:space-y-2 mb-3 sm:mb-4 text-xs sm:text-sm md:text-base">
+                    <div class="flex justify-between">
+                        <span class="truncate pr-2">Starting Bid:</span>
+                        <span class="font-semibold flex-shrink-0">$${auction.startingBid.toFixed(2)}</span>
+                    </div>
+                    <div class="flex justify-between">
+                        <span class="truncate pr-2">Current Highest:</span>
+                        <span class="font-semibold text-green-400 flex-shrink-0">$${auction.currentHighestBid.toFixed(2)}</span>
+                    </div>
+                    <div class="flex justify-between">
+                        <span class="truncate pr-2">Bids:</span>
+                        <span class="font-semibold flex-shrink-0">${auction.bidCount}</span>
+                    </div>
+                    <div class="flex justify-between">
+                        <span class="truncate pr-2">Ends:</span>
+                        <span class="text-xs sm:text-sm flex-shrink-0">${endTime.toLocaleString()}</span>
+                    </div>
+                </div>
+                <div class="flex flex-col sm:flex-row space-y-2 sm:space-y-0 sm:space-x-2">
+                    <button class="flex-1 bg-purple-600 hover:bg-purple-700 py-2 px-3 sm:px-4 rounded-lg transition text-xs sm:text-sm md:text-base">
+                        <i class="fas fa-gavel mr-1 sm:mr-2"></i><span class="hidden sm:inline">Place Bid</span><span class="sm:hidden">Bid</span>
+                    </button>
+                    <button class="flex-1 bg-gray-600 hover:bg-gray-700 py-2 px-3 sm:px-4 rounded-lg transition text-xs sm:text-sm md:text-base">
+                        <i class="fas fa-eye mr-1 sm:mr-2"></i><span class="hidden sm:inline">Details</span><span class="sm:hidden">View</span>
+                    </button>
+                </div>
+            `;
+            
+            return card;
+        }
+
+        function loadSampleAuctions() {
+            const grid = document.getElementById('auctionsGrid');
+            grid.innerHTML = '';
+            
+            sampleAuctions.forEach(auction => {
+                const card = createAuctionCard(auction);
+                grid.appendChild(card);
+            });
+        }
+
+        function loadSampleBids() {
+            const bidsList = document.getElementById('myBidsList');
+            bidsList.innerHTML = '';
+            
+            sampleAuctions.slice(0, 3).forEach(auction => {
+                const bidItem = document.createElement('div');
+                bidItem.className = 'glass-effect rounded-lg p-3 sm:p-4';
+                bidItem.innerHTML = `
+                    <div class="flex justify-between items-start mb-2">
+                        <h4 class="font-semibold text-sm sm:text-base truncate flex-1 pr-2">${auction.title}</h4>
+                        <span class="text-xs sm:text-sm text-green-400 flex-shrink-0">$${auction.currentHighestBid.toFixed(2)}</span>
+                    </div>
+                    <p class="text-xs sm:text-sm text-gray-300">Your bid: $${(auction.currentHighestBid * 0.9).toFixed(2)}</p>
+                `;
+                bidsList.appendChild(bidItem);
+            });
+        }
+
+        function showTab(tabName) {
+            // Hide all tabs
+            document.querySelectorAll('.tab-content').forEach(tab => {
+                tab.classList.add('hidden');
+            });
+            
+            // Remove active state from all tab buttons
+            document.querySelectorAll('[id$="Tab"]').forEach(tab => {
+                tab.classList.remove('bg-purple-600');
+                tab.classList.add('hover:bg-purple-500');
+            });
+            
+            // Show selected tab
+            document.getElementById(tabName + 'Content').classList.remove('hidden');
+            
+            // Add active state to selected tab button
+            const activeTab = document.getElementById(tabName + 'Tab');
+            activeTab.classList.add('bg-purple-600');
+            activeTab.classList.remove('hover:bg-purple-500');
+            
+            // Load tab-specific content
+            if (tabName === 'auctions') {
+                loadSampleAuctions();
+            } else if (tabName === 'myBids') {
+                loadSampleBids();
+            }
+        }
+
+        // Initialize page
+        document.addEventListener('DOMContentLoaded', function() {
+            showTab('auctions');
+        });
+    </script>
+</body>
+</html>

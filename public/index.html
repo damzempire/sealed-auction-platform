@@ -28,12 +28,30 @@
             -webkit-line-clamp: 3;
             -webkit-box-orient: vertical;
             overflow: hidden;
+            line-clamp: 3;
+            display: -moz-box;
+            -moz-line-clamp: 3;
+            -moz-box-orient: vertical;
         }
         @media (max-width: 640px) {
             .truncate-mobile {
                 overflow: hidden;
                 text-overflow: ellipsis;
                 white-space: nowrap;
+            }
+            .auction-card-mobile {
+                min-height: 280px;
+            }
+            .mobile-overflow-hidden {
+                overflow: hidden;
+            }
+        }
+        @media (max-width: 768px) {
+            .md-flex-col {
+                flex-direction: column;
+            }
+            .md-w-full {
+                width: 100%;
             }
         }
     </style>
@@ -108,14 +126,14 @@
 
         <!-- Auctions Tab -->
         <div id="auctionsContent" class="tab-content">
-            <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-6" id="auctionsGrid">
+            <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 sm:gap-4 lg:gap-6" id="auctionsGrid">
                 <!-- Auctions will be dynamically loaded here -->
             </div>
         </div>
 
         <!-- Create Auction Tab -->
         <div id="createContent" class="tab-content hidden">
-            <div class="glass-effect rounded-xl p-4 sm:p-6 lg:p-8 max-w-2xl mx-auto">
+            <div class="glass-effect rounded-xl p-3 sm:p-4 lg:p-6 max-w-full sm:max-w-2xl mx-auto">
                 <h2 class="text-xl sm:text-2xl font-bold mb-6">Create New Auction</h2>
                 <form id="createAuctionForm" class="space-y-4 sm:space-y-6">
                     <div>
@@ -145,9 +163,9 @@
 
         <!-- My Bids Tab -->
         <div id="myBidsContent" class="tab-content hidden">
-            <div class="glass-effect rounded-xl p-4 sm:p-6 lg:p-8">
-                <h2 class="text-xl sm:text-2xl font-bold mb-6">Your Bids</h2>
-                <div id="myBidsList" class="space-y-3 sm:space-y-4">
+            <div class="glass-effect rounded-xl p-3 sm:p-4 lg:p-6">
+                <h2 class="text-xl sm:text-2xl font-bold mb-4 sm:mb-6">Your Bids</h2>
+                <div id="myBidsList" class="space-y-2 sm:space-y-3 lg:space-y-4">
                     <!-- User's bids will be displayed here -->
                 </div>
             </div>
