@@ -389,11 +389,131 @@
                     <span class="bg-purple-600 px-2 py-1 rounded text-xs hidden sm:inline">Blockchain</span>
                 </div>
 
-                    </button>
+                <div class="flex items-center space-x-4">
+                    <!-- Notification Bell -->
+                    <div class="relative">
+                        <button 
+                            onclick="openNotificationCenter()"
+                            class="relative p-2 hover:bg-white/10 rounded-full transition-colors"
+                            title="Notifications"
+                        >
+                            <i class="fas fa-bell text-xl"></i>
+                            <span id="notification-badge" class="hidden absolute -top-1 -right-1 bg-red-500 text-white text-xs w-5 h-5 rounded-full flex items-center justify-center animate-pulse">
+                                0
+                            </span>
+                        </button>
+                    </div>
+                    
+                    <!-- User Menu -->
+                    <div id="userMenu" class="hidden">
+                        <span id="usernameDisplay" class="mr-2"></span>
+                        <button onclick="logout()" class="bg-red-500 hover:bg-red-600 text-white px-4 py-2 rounded-lg transition-colors">
+                            <i class="fas fa-sign-out-alt mr-2"></i>Logout
+                        </button>
+                    </div>
                 </div>
             </div>
         </div>
     </header>
+
+    <!-- Notification Center -->
+    <div id="notification-center" class="fixed top-16 right-4 w-96 max-w-[calc(100vw-2rem)] glass-effect rounded-xl shadow-2xl hidden z-50">
+        <div class="p-4 border-b flex justify-between items-center">
+            <h3 class="text-lg font-bold">Notifications</h3>
+            <div class="flex items-center space-x-2">
+                <button 
+                    onclick="markAllNotificationsAsRead()"
+                    class="text-sm text-purple-600 hover:text-purple-700 transition-colors"
+                    title="Mark all as read"
+                >
+                    <i class="fas fa-check-double mr-1"></i>Mark all read
+                </button>
+                <button 
+                    onclick="clearAllNotifications()"
+                    class="text-sm text-red-600 hover:text-red-700 transition-colors"
+                    title="Clear all notifications"
+                >
+                    <i class="fas fa-trash mr-1"></i>Clear all
+                </button>
+                <button 
+                    onclick="closeNotificationCenter()"
+                    class="text-gray-500 hover:text-gray-700 transition-colors"
+                    title="Close"
+                >
+                    <i class="fas fa-times"></i>
+                </button>
+            </div>
+        </div>
+        <div id="notification-list" class="max-h-96 overflow-y-auto">
+            <!-- Notifications will be rendered here -->
+        </div>
+        <div class="p-4 border-t">
+            <button 
+                onclick="openNotificationSettings()"
+                class="w-full text-left text-sm text-purple-600 hover:text-purple-700 transition-colors"
+            >
+                <i class="fas fa-cog mr-2"></i>Notification Settings
+            </button>
+        </div>
+    </div>
+
+    <!-- Notification Settings Modal -->
+    <div id="notification-settings-modal" class="fixed inset-0 bg-black bg-opacity-50 hidden z-50 flex items-center justify-center p-4">
+        <div class="glass-effect rounded-xl p-6 sm:p-8 max-w-md w-full max-h-[90vh] overflow-y-auto">
+            <h2 class="text-xl sm:text-2xl font-bold mb-6">Notification Settings</h2>
+            <div class="space-y-4">
+                <div class="flex items-center justify-between">
+                    <div>
+                        <label class="font-semibold">Enable Notifications</label>
+                        <p class="text-sm text-gray-500">Receive browser notifications</p>
+                    </div>
+                    <input type="checkbox" id="enable-notifications" class="w-5 h-5" onchange="toggleNotificationPermissions()">
+                </div>
+                
+                <div class="border-t pt-4">
+                    <h3 class="font-semibold mb-3">Notification Types</h3>
+                    <div class="space-y-2">
+                        <div class="flex items-center justify-between">
+                            <label for="notify-auctions">New Auctions</label>
+                            <input type="checkbox" id="notify-auctions" class="w-5 h-5" checked onchange="saveNotificationPreferences()">
+                        </div>
+                        <div class="flex items-center justify-between">
+                            <label for="notify-bids">New Bids</label>
+                            <input type="checkbox" id="notify-bids" class="w-5 h-5" checked onchange="saveNotificationPreferences()">
+                        </div>
+                        <div class="flex items-center justify-between">
+                            <label for="notify-results">Auction Results</label>
+                            <input type="checkbox" id="notify-results" class="w-5 h-5" checked onchange="saveNotificationPreferences()">
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="border-t pt-4">
+                    <h3 class="font-semibold mb-3">Storage</h3>
+                    <div class="flex items-center justify-between">
+                        <div>
+                            <p class="text-sm">Keep notifications for</p>
+                            <select id="notification-retention" class="mt-1 p-2 rounded bg-white/50 w-full" onchange="saveNotificationPreferences()">
+                                <option value="25">Last 25 notifications</option>
+                                <option value="50" selected>Last 50 notifications</option>
+                                <option value="100">Last 100 notifications</option>
+                                <option value="200">Last 200 notifications</option>
+                            </select>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="flex space-x-3 pt-4">
+                    <button onclick="closeNotificationSettings()" class="flex-1 bg-gray-500 hover:bg-gray-600 text-white px-4 py-2 rounded-lg transition-colors">
+                        Close
+                    </button>
+                    <button onclick="saveNotificationPreferences()" class="flex-1 bg-purple-600 hover:bg-purple-700 text-white px-4 py-2 rounded-lg transition-colors">
+                        Save Changes
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
 
     <!-- Main Content -->
     <main class="container mx-auto px-4 py-8">

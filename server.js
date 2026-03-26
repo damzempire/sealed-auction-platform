@@ -11,6 +11,7 @@ const rateLimit = require('express-rate-limit');
 const { v4: uuidv4 } = require('uuid');
 const { Server, Keypair, TransactionBuilder, Networks, BASE_FEE, Asset } = require('stellar-sdk');
 const AuctionDatabase = require('./database');
+const { validateRequest, validator } = require('./utils/validation');
 require('dotenv').config();
 
 const app = express();
@@ -24,6 +25,30 @@ const io = socketIo(server, {
 
 // Security middleware
 app.use(helmet());
+
+// Security monitoring endpoint (admin only)
+app.get('/api/security/stats', (req, res) => {
+  try {
+    // In production, add admin authentication here
+    const stats = db.getSecurityStats();
+    res.json(stats);
+  } catch (error) {
+    console.error('Error getting security stats:', error);
+    res.status(500).json({ error: 'Failed to get security stats' });
+  }
+});
+
+app.get('/api/security/logs', (req, res) => {
+  try {
+    const limit = parseInt(req.query.limit) || 100;
+    // In production, add admin authentication here
+    const logs = db.getQueryLog(limit);
+    res.json(logs);
+  } catch (error) {
+    console.error('Error getting query logs:', error);
+    res.status(500).json({ error: 'Failed to get query logs' });
+  }
+});
 
 // Restrictive CORS configuration
 const allowedOrigins = process.env.ALLOWED_ORIGINS
@@ -57,6 +82,25 @@ const limiter = rateLimit({
   max: 100 // limit each IP to 100 requests per windowMs
 });
 app.use(limiter);
+
+// Stricter rate limits for sensitive endpoints
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 5, // limit each IP to 5 attempts per windowMs
+  message: { error: 'Too many authentication attempts, please try again later' }
+});
+
+const bidLimiter = rateLimit({
+  windowMs: 1 * 60 * 1000, // 1 minute
+  max: 10, // limit each IP to 10 bids per minute
+  message: { error: 'Too many bid attempts, please slow down' }
+});
+
+const auctionCreateLimiter = rateLimit({
+  windowMs: 1 * 60 * 1000, // 1 minute
+  max: 5, // limit each IP to 5 auction creations per minute
+  message: { error: 'Too many auction creation attempts, please slow down' }
+});
 
 // Backup directory
 const backupDir = path.join(__dirname, 'backups');
@@ -227,10 +271,22 @@ function restoreData() {
 restoreData();
 
 // Routes
-app.get('/api/auctions', (req, res) => {
+app.get('/api/auctions', 
+  validateRequest.query({
+    page: { type: 'number' },
+    limit: { type: 'number' },
+    status: { type: 'status' }
+  }),
+  (req, res) => {
   try {
-    const auctions = db.getActiveAuctions();
-    const auctionList = auctions.map(auction => ({
+    const { page = 1, limit = 10, status = null } = req.sanitizedQuery || {};
+    
+    // Additional validation for limit to prevent excessive data loading
+    const validatedLimit = Math.min(limit, 100);
+    
+    const result = db.getPaginatedAuctions(page, validatedLimit, status);
+    
+    const auctionList = result.auctions.map(auction => ({
       id: auction.id,
       title: auction.title,
       description: auction.description,
@@ -241,19 +297,40 @@ app.get('/api/auctions', (req, res) => {
       bidCount: db.getBidCount(auction.id),
       creator: auction.creator_id
     }));
-    res.json(auctionList);
+    
+    res.json({
+      auctions: auctionList,
+      pagination: result.pagination
+    });
   } catch (error) {
     console.error('Error fetching auctions:', error);
     res.status(500).json({ error: 'Failed to fetch auctions' });
   }
 });
 
-app.post('/api/auctions', async (req, res) => {
+app.post('/api/auctions', 
+  auctionCreateLimiter,
+  validateRequest.body({
+    title: { type: 'title', required: true },
+    description: { type: 'description', required: true },
+    startingBid: { type: 'number', required: true, min: 0.01 },
+    endTime: { type: 'date', required: true, allowPast: false },
+    userId: { type: 'uuid', required: true }
+  }),
+  async (req, res) => {
   try {
-    const { title, description, startingBid, endTime, userId } = req.body;
+    const { title, description, startingBid, endTime, userId } = req.sanitizedBody;
     
-    if (!title || !description || !startingBid || !endTime || !userId) {
-      return res.status(400).json({ error: 'Missing required fields' });
+    // Additional business logic validation
+    if (startingBid > 10000000) {
+      return res.status(400).json({ error: 'Starting bid cannot exceed 10,000,000' });
+    }
+    
+    // Validate end time is not too far in the future (max 1 year)
+    const maxEndTime = new Date();
+    maxEndTime.setFullYear(maxEndTime.getFullYear() + 1);
+    if (endTime > maxEndTime) {
+      return res.status(400).json({ error: 'Auction end time cannot be more than 1 year in the future' });
     }
 
     const auctionId = generateAuctionId();
@@ -273,22 +350,32 @@ app.post('/api/auctions', async (req, res) => {
   }
 });
 
-app.get('/api/auctions/:id', (req, res) => {
-
-  const auction = auctions.get(req.params.id);
-  if (!auction) {
-    return res.status(404).json({ error: 'Auction not found' });
-  }
+app.get('/api/auctions/:id', 
+  validateRequest.params({
+    id: { type: 'uuid', required: true }
+  }),
+  (req, res) => {
+    const auctionId = req.sanitizedParams.id;
+    
+    const auction = auctions.get(auctionId);
+    if (!auction) {
+      return res.status(404).json({ error: 'Auction not found' });
+    }
+    
+    res.json(auction);
 });
 
-app.post('/api/bids', async (req, res) => {
+app.post('/api/bids', 
+  validateRequest.body({
+    auctionId: { type: 'uuid', required: true },
+    bidderId: { type: 'uuid', required: true },
+    amount: { type: 'bidAmount', required: true, minimumBid: 0.01 },
+    secretKey: { type: 'secretKey', required: true }
+  }),
+  async (req, res) => {
   try {
-    const { auctionId, bidderId, amount, secretKey } = req.body;
+    const { auctionId, bidderId, amount, secretKey } = req.sanitizedBody;
     
-    if (!auctionId || !bidderId || amount === undefined || !secretKey) {
-      return res.status(400).json({ error: 'Missing required fields' });
-    }
-
     // Get auction from database
     const auctionDb = db.getAuction(auctionId);
     if (!auctionDb) {
@@ -299,8 +386,10 @@ app.post('/api/bids', async (req, res) => {
       return res.status(400).json({ error: 'Auction is not active' });
     }
 
-    if (amount <= auctionDb.starting_bid) {
-      return res.status(400).json({ error: 'Bid must be higher than starting bid' });
+    // Validate bid amount against current highest bid
+    const minimumBid = Math.max(auctionDb.starting_bid, auctionDb.current_highest_bid || auctionDb.starting_bid);
+    if (amount <= minimumBid) {
+      return res.status(400).json({ error: `Bid must be higher than ${minimumBid}` });
     }
 
     const encryptedBid = encryptBid(amount, secretKey);
@@ -331,9 +420,15 @@ app.post('/api/bids', async (req, res) => {
 });
 
 
-app.post('/api/auctions/:id/close', (req, res) => {
+app.post('/api/auctions/:id/close', 
+  validateRequest.params({
+    id: { type: 'uuid', required: true }
+  }),
+  (req, res) => {
   try {
-    const auctionDb = db.getAuction(req.params.id);
+    const auctionId = req.sanitizedParams.id;
+    
+    const auctionDb = db.getAuction(auctionId);
     if (!auctionDb) {
       return res.status(404).json({ error: 'Auction not found' });
     }
@@ -343,7 +438,7 @@ app.post('/api/auctions/:id/close', (req, res) => {
     }
 
     // Get all bids and find winner
-    const allBids = db.getBidsForAuction(req.params.id);
+    const allBids = db.getBidsForAuction(auctionId);
     let winnerId = null;
     let winningBidId = null;
     
@@ -354,10 +449,10 @@ app.post('/api/auctions/:id/close', (req, res) => {
     }
     
     // Update auction in database
-    db.closeAuction(req.params.id, winnerId, winningBidId);
+    db.closeAuction(auctionId, winnerId, winningBidId);
     
     // Update in-memory
-    const auction = auctions.get(req.params.id);
+    const auction = auctions.get(auctionId);
     if (auction) {
       auction.close();
     }
@@ -370,14 +465,15 @@ app.post('/api/auctions/:id/close', (req, res) => {
   }
 });
 
-app.post('/api/users/register', async (req, res) => {
+app.post('/api/users/register', 
+  validateRequest.body({
+    username: { type: 'username', required: true },
+    password: { type: 'password', required: true }
+  }),
+  async (req, res) => {
   try {
-    const { username, password } = req.body;
+    const { username, password } = req.sanitizedBody;
     
-    if (!username || !password) {
-      return res.status(400).json({ error: 'Username and password required' });
-    }
-
     // Check if user exists in database
     const existingUser = db.getUserByUsername(username);
     if (existingUser) {
@@ -395,14 +491,15 @@ app.post('/api/users/register', async (req, res) => {
   }
 });
 
-app.post('/api/users/login', async (req, res) => {
+app.post('/api/users/login', 
+  validateRequest.body({
+    username: { type: 'string', required: true },
+    password: { type: 'string', required: true }
+  }),
+  async (req, res) => {
   try {
-    const { username, password } = req.body;
+    const { username, password } = req.sanitizedBody;
     
-    if (!username || !password) {
-      return res.status(400).json({ error: 'Username and password required' });
-    }
-
     // Get user from database
     const user = db.getUserByUsername(username);
     if (!user) {

@@ -5,6 +5,26 @@ const socket = io();
 let currentUser = null;
 let auctions = [];
 let currentTab = "auctions";
+let currentPage = 1;
+let isLoading = false;
+let hasMoreAuctions = true;
+const AUCTIONS_PER_PAGE = 10;
+
+// Notification state
+let notifications = [];
+let unreadNotifications = 0;
+const MAX_NOTIFICATIONS = 50; // Keep last 50 notifications
+
+// Notification preferences
+let notificationPreferences = {
+    enabled: true,
+    types: {
+        auctions: true,
+        bids: true,
+        results: true
+    },
+    retention: 50
+};
 
 // DOM elements
 const authModal = document.getElementById("authModal");
@@ -29,10 +49,17 @@ function initializeApp() {
     if (storedUser) {
         currentUser = JSON.parse(storedUser);
         hideAuthModal();
+        updateUserDisplay();
     }
     
+    // Load notifications from localStorage
+    loadNotifications();
+    
     // Load initial auctions
-    loadAuctions();
+    loadAuctions(true);
+    
+    // Setup infinite scroll
+    setupInfiniteScroll();
 }
 
 function setupEventListeners() {
@@ -62,30 +89,31 @@ function setupSocketListeners() {
     
     socket.on("disconnect", () => {
         console.log("Disconnected from server");
+        showNotification("Connection lost. Reconnecting...", "warning");
     });
     
     // Auction events
     socket.on("auctionCreated", (auction) => {
         console.log("New auction created:", auction);
         addAuctionToGrid(auction);
-        showNotification("New auction created!", "success");
+        addNotification(`New auction: ${auction.title}`, "auction", { auctionId: auction.id });
     });
     
     socket.on("auctionClosed", (auction) => {
         console.log("Auction closed:", auction);
         updateAuctionInGrid(auction);
-        showNotification(`Auction "${auction.title}" has closed!`, "info");
         
-        // Show winner if there is one
         if (auction.winner) {
-            showNotification(`Winner: ${auction.winner}`, "success");
+            addNotification(`Auction "${auction.title}" closed! Winner: ${auction.winner}`, "success", { auctionId: auction.id });
+        } else {
+            addNotification(`Auction "${auction.title}" closed without bids`, "info", { auctionId: auction.id });
         }
     });
     
     socket.on("bidPlaced", (data) => {
         console.log("New bid placed:", data);
         updateBidCount(data.auctionId, data.bidCount);
-        showNotification("New bid placed!", "info");
+        addNotification("New bid placed on auction!", "bid", { auctionId: data.auctionId });
     });
 }
 
@@ -118,8 +146,9 @@ function handleAuth(e) {
         currentUser = data;
         localStorage.setItem("currentUser", JSON.stringify(currentUser));
         hideAuthModal();
+        updateUserDisplay();
         showNotification(`Successfully ${isLogin ? "logged in" : "registered"}!`, "success");
-        loadAuctions();
+        loadAuctions(true);
     })
     .catch(error => {
         console.error("Auth error:", error);
@@ -139,17 +168,49 @@ function hideAuthModal() {
 }
 
 // Auction functions
-function loadAuctions() {
-    fetch("/api/auctions")
+function loadAuctions(reset = false) {
+    if (isLoading || (!hasMoreAuctions && !reset)) return;
+    
+    isLoading = true;
+    showLoadingIndicator();
+    
+    if (reset) {
+        currentPage = 1;
+        auctions = [];
+        renderAuctions();
+    }
+    
+    fetch(`/api/auctions?page=${currentPage}&limit=${AUCTIONS_PER_PAGE}`)
     .then(response => response.json())
     .then(data => {
-        auctions = data;
+        const { auctions: newAuctions, pagination } = data;
+        
+        if (reset) {
+            auctions = newAuctions;
+        } else {
+            auctions = [...auctions, ...newAuctions];
+        }
+        
+        currentPage = pagination.page;
+        hasMoreAuctions = pagination.hasMore;
+        isLoading = false;
+        
         renderAuctions();
+        hideLoadingIndicator();
     })
     .catch(error => {
         console.error("Error loading auctions:", error);
         showNotification("Failed to load auctions", "error");
+        isLoading = false;
+        hideLoadingIndicator();
     });
+}
+
+function loadMoreAuctions() {
+    if (!isLoading && hasMoreAuctions) {
+        currentPage++;
+        loadAuctions(false);
+    }
 }
 
 function renderAuctions() {
@@ -167,16 +228,54 @@ function renderAuctions() {
         return;
     }
     
+    // Render all auctions in correct order (newest first)
     auctions.forEach(auction => {
-        addAuctionToGrid(auction);
+        const auctionCard = createAuctionCard(auction);
+        auctionsGrid.insertAdjacentHTML("beforeend", auctionCard);
     });
 }
 
-function addAuctionToGrid(auction) {
+function setupInfiniteScroll() {
+    window.addEventListener('scroll', () => {
+        const { scrollTop, scrollHeight, clientHeight } = document.documentElement;
+        
+        // Load more when user is within 100px of bottom
+        if (scrollTop + clientHeight >= scrollHeight - 100 && !isLoading && hasMoreAuctions) {
+            loadMoreAuctions();
+        }
+    });
+}
+
+function showLoadingIndicator() {
+    let loader = document.getElementById('loading-indicator');
+    if (!loader) {
+        loader = document.createElement('div');
+        loader.id = 'loading-indicator';
+        loader.className = 'fixed bottom-4 left-1/2 transform -translate-x-1/2 bg-gray-800 text-white px-6 py-3 rounded-full shadow-lg animate-pulse z-50';
+        loader.innerHTML = `
+            <div class="flex items-center space-x-2">
+                <i class="fas fa-spinner fa-spin"></i>
+                <span>Loading more auctions...</span>
+            </div>
+        `;
+        document.body.appendChild(loader);
+    }
+    loader.style.display = 'block';
+}
+
+function hideLoadingIndicator() {
+    const loader = document.getElementById('loading-indicator');
+    if (loader) {
+        loader.style.display = 'none';
+    }
+}
+
+function addAuctionToGrid(auction, prepend = true) {
     if (!auctionsGrid) return;
     
     const auctionCard = createAuctionCard(auction);
-    auctionsGrid.insertAdjacentHTML("afterbegin", auctionCard);
+    // Prepend new auctions (from socket events), append when loading more
+    auctionsGrid.insertAdjacentHTML(prepend ? "afterbegin" : "beforeend", auctionCard);
 }
 
 function createAuctionCard(auction) {
@@ -398,7 +497,73 @@ function switchTab(tabName) {
     currentTab = tabName;
 }
 
-function showNotification(message, type = "info", duration = 3000) {
+// Enhanced Notification System Functions
+function loadNotifications() {
+    const stored = localStorage.getItem('auctionNotifications');
+    if (stored) {
+        try {
+            notifications = JSON.parse(stored);
+            updateUnreadCount();
+            updateNotificationBadge();
+        } catch (e) {
+            console.error('Failed to load notifications:', e);
+            notifications = [];
+        }
+    }
+    
+    // Load preferences
+    loadNotificationPreferences();
+}
+
+function saveNotifications() {
+    localStorage.setItem('auctionNotifications', JSON.stringify(notifications));
+}
+
+function addNotification(message, type = 'info', data = null) {
+    // Check notification preferences
+    if (!notificationPreferences.enabled) return;
+    
+    // Check type preferences
+    if (type === 'auction' && !notificationPreferences.types.auctions) return;
+    if (type === 'bid' && !notificationPreferences.types.bids) return;
+    if ((type === 'success' || type === 'error') && !notificationPreferences.types.results) return;
+    
+    const notification = {
+        id: Date.now().toString(),
+        message,
+        type,
+        timestamp: new Date().toISOString(),
+        read: false,
+        data
+    };
+    
+    // Add to beginning of array (newest first)
+    notifications.unshift(notification);
+    
+    // Limit storage
+    if (notifications.length > MAX_NOTIFICATIONS) {
+        notifications = notifications.slice(0, MAX_NOTIFICATIONS);
+    }
+    
+    // Update unread count
+    if (!notification.read) {
+        unreadNotifications++;
+        updateNotificationBadge();
+    }
+    
+    // Save to localStorage
+    saveNotifications();
+    
+    // Show toast notification
+    showToastNotification(message, type);
+    
+    // Send browser notification if enabled
+    sendBrowserNotification(message, type);
+    
+    return notification;
+}
+
+function showToastNotification(message, type = 'info', duration = 3000) {
     const notification = document.createElement("div");
     notification.className = `fixed top-4 right-4 z-50 p-4 rounded-lg shadow-lg animate-fade-in ${
         type === "success" ? "bg-green-500" :
@@ -426,8 +591,284 @@ function showNotification(message, type = "info", duration = 3000) {
     }, duration);
 }
 
+function sendBrowserNotification(message, type = 'info') {
+    if (!notificationPreferences.enabled || !('Notification' in window)) return;
+    
+    if (Notification.permission === 'granted') {
+        const icon = getNotificationIcon(type).split(' ')[1]; // Get icon class
+        new Notification('Auction Update', {
+            body: message,
+            icon: '/favicon.ico', // You can add a proper icon
+            badge: '/favicon.ico',
+            requireInteraction: false,
+            tag: Date.now().toString() // Unique tag for each notification
+        });
+    } else if (Notification.permission !== 'denied') {
+        // Request permission on first attempt
+        Notification.requestPermission().then(permission => {
+            if (permission === 'granted') {
+                sendBrowserNotification(message, type);
+            }
+        });
+    }
+}
+
+function markNotificationAsRead(notificationId) {
+    const notification = notifications.find(n => n.id === notificationId);
+    if (notification && !notification.read) {
+        notification.read = true;
+        unreadNotifications = Math.max(0, unreadNotifications - 1);
+        updateNotificationBadge();
+        saveNotifications();
+    }
+}
+
+function markAllNotificationsAsRead() {
+    notifications.forEach(n => n.read = true);
+    unreadNotifications = 0;
+    updateNotificationBadge();
+    saveNotifications();
+}
+
+function updateUnreadCount() {
+    unreadNotifications = notifications.filter(n => !n.read).length;
+}
+
+function updateNotificationBadge() {
+    const badge = document.getElementById('notification-badge');
+    if (badge) {
+        if (unreadNotifications > 0) {
+            badge.textContent = unreadNotifications > 99 ? '99+' : unreadNotifications;
+            badge.classList.remove('hidden');
+        } else {
+            badge.classList.add('hidden');
+        }
+    }
+}
+
+function deleteNotification(notificationId) {
+    const index = notifications.findIndex(n => n.id === notificationId);
+    if (index !== -1) {
+        if (!notifications[index].read) {
+            unreadNotifications = Math.max(0, unreadNotifications - 1);
+            updateNotificationBadge();
+        }
+        notifications.splice(index, 1);
+        saveNotifications();
+        renderNotificationCenter();
+    }
+}
+
+function clearAllNotifications() {
+    if (confirm('Are you sure you want to clear all notifications?')) {
+        notifications = [];
+        unreadNotifications = 0;
+        updateNotificationBadge();
+        saveNotifications();
+        renderNotificationCenter();
+    }
+}
+
+function getNotificationIcon(type) {
+    switch(type) {
+        case 'success': return 'fa-check-circle text-green-500';
+        case 'error': return 'fa-times-circle text-red-500';
+        case 'warning': return 'fa-exclamation-triangle text-yellow-500';
+        case 'info': return 'fa-info-circle text-blue-500';
+        case 'auction': return 'fa-gavel text-purple-500';
+        case 'bid': return 'fa-hand-holding-usd text-green-500';
+        default: return 'fa-bell text-gray-500';
+    }
+}
+
+function formatNotificationTime(timestamp) {
+    const date = new Date(timestamp);
+    const now = new Date();
+    const diffMs = now - date;
+    const diffMins = Math.floor(diffMs / 60000);
+    const diffHours = Math.floor(diffMins / 60);
+    const diffDays = Math.floor(diffHours / 24);
+    
+    if (diffMins < 1) return 'Just now';
+    if (diffMins < 60) return `${diffMins}m ago`;
+    if (diffHours < 24) return `${diffHours}h ago`;
+    if (diffDays < 7) return `${diffDays}d ago`;
+    return date.toLocaleDateString();
+}
+
+function openNotificationCenter() {
+    const center = document.getElementById('notification-center');
+    if (center) {
+        renderNotificationCenter();
+        center.classList.remove('hidden');
+        markAllNotificationsAsRead();
+    }
+}
+
+function closeNotificationCenter() {
+    const center = document.getElementById('notification-center');
+    if (center) {
+        center.classList.add('hidden');
+    }
+}
+
+function renderNotificationCenter() {
+    const container = document.getElementById('notification-list');
+    if (!container) return;
+    
+    container.innerHTML = '';
+    
+    if (notifications.length === 0) {
+        container.innerHTML = `
+            <div class="text-center py-8">
+                <i class="fas fa-bell-slash text-4xl mb-4 opacity-50"></i>
+                <p class="text-gray-500">No notifications yet</p>
+            </div>
+        `;
+        return;
+    }
+    
+    notifications.forEach(notification => {
+        const item = document.createElement('div');
+        item.className = `p-4 border-b hover:bg-gray-50 cursor-pointer transition-colors ${
+            !notification.read ? 'bg-blue-50' : ''
+        }`;
+        item.onclick = () => {
+            markNotificationAsRead(notification.id);
+            renderNotificationCenter();
+        };
+        
+        item.innerHTML = `
+            <div class="flex items-start justify-between">
+                <div class="flex items-start space-x-3 flex-1">
+                    <i class="fas ${getNotificationIcon(notification.type)} text-lg mt-1"></i>
+                    <div class="flex-1">
+                        <p class="text-sm ${!notification.read ? 'font-semibold' : ''}">${notification.message}</p>
+                        <p class="text-xs text-gray-500 mt-1">${formatNotificationTime(notification.timestamp)}</p>
+                    </div>
+                </div>
+                <button 
+                    onclick="event.stopPropagation(); deleteNotification('${notification.id}')"
+                    class="text-gray-400 hover:text-red-500 transition-colors"
+                >
+                    <i class="fas fa-times"></i>
+                </button>
+            </div>
+        `;
+        
+        container.appendChild(item);
+    });
+}
+
+// Notification Preferences Functions
+function loadNotificationPreferences() {
+    const stored = localStorage.getItem('notificationPreferences');
+    if (stored) {
+        try {
+            notificationPreferences = JSON.parse(stored);
+            
+            // Update UI
+            document.getElementById('enable-notifications').checked = notificationPreferences.enabled;
+            document.getElementById('notify-auctions').checked = notificationPreferences.types.auctions;
+            document.getElementById('notify-bids').checked = notificationPreferences.types.bids;
+            document.getElementById('notify-results').checked = notificationPreferences.types.results;
+            document.getElementById('notification-retention').value = notificationPreferences.retention.toString();
+            
+            // Update MAX_NOTIFICATIONS
+            window.MAX_NOTIFICATIONS = parseInt(notificationPreferences.retention);
+        } catch (e) {
+            console.error('Failed to load notification preferences:', e);
+        }
+    }
+}
+
+function saveNotificationPreferences() {
+    notificationPreferences = {
+        enabled: document.getElementById('enable-notifications').checked,
+        types: {
+            auctions: document.getElementById('notify-auctions').checked,
+            bids: document.getElementById('notify-bids').checked,
+            results: document.getElementById('notify-results').checked
+        },
+        retention: parseInt(document.getElementById('notification-retention').value)
+    };
+    
+    localStorage.setItem('notificationPreferences', JSON.stringify(notificationPreferences));
+    window.MAX_NOTIFICATIONS = notificationPreferences.retention;
+    
+    // Limit existing notifications if retention changed
+    if (notifications.length > notificationPreferences.retention) {
+        notifications = notifications.slice(0, notificationPreferences.retention);
+        saveNotifications();
+        renderNotificationCenter();
+    }
+    
+    showNotification('Notification preferences saved!', 'success');
+}
+
+function toggleNotificationPermissions() {
+    const enabled = document.getElementById('enable-notifications').checked;
+    
+    if (enabled && 'Notification' in window) {
+        if (Notification.permission === 'default') {
+            Notification.requestPermission().then(permission => {
+                if (permission !== 'granted') {
+                    document.getElementById('enable-notifications').checked = false;
+                    notificationPreferences.enabled = false;
+                    saveNotificationPreferences();
+                    showNotification('Browser notifications denied', 'warning');
+                }
+            });
+        }
+    }
+    
+    notificationPreferences.enabled = enabled;
+    saveNotificationPreferences();
+}
+
+function openNotificationSettings() {
+    closeNotificationCenter();
+    const modal = document.getElementById('notification-settings-modal');
+    if (modal) {
+        loadNotificationPreferences();
+        modal.classList.remove('hidden');
+    }
+}
+
+function closeNotificationSettings() {
+    const modal = document.getElementById('notification-settings-modal');
+    if (modal) {
+        modal.classList.add('hidden');
+    }
+}
+
+// Legacy showNotification function - now uses enhanced notification system
+function showNotification(message, type = "info", duration = 3000) {
+    // Add to notification history
+    addNotification(message, type);
+}
+
 function showAuthModal() {
     if (authModal) authModal.classList.remove("hidden");
+}
+
+// User authentication functions
+function updateUserDisplay() {
+    const userMenu = document.getElementById('userMenu');
+    const usernameDisplay = document.getElementById('usernameDisplay');
+    
+    if (currentUser && userMenu && usernameDisplay) {
+        userMenu.classList.remove('hidden');
+        usernameDisplay.textContent = `Welcome, ${currentUser.username}!`;
+    }
+}
+
+function logout() {
+    if (confirm('Are you sure you want to logout?')) {
+        currentUser = null;
+        localStorage.removeItem('currentUser');
+        window.location.reload();
+    }
 }
 
 // Close modals when clicking outside
@@ -448,6 +889,7 @@ function joinAuctionRoom(auctionId) {
 // Auto-refresh auctions every 30 seconds as fallback
 setInterval(() => {
     if (currentTab === "auctions") {
-        loadAuctions();
+        // Only refresh if we're on the first page to avoid losing position
+        loadAuctions(true);
     }
 }, 30000);
