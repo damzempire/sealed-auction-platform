@@ -155,16 +155,22 @@ app.post('/api/auctions', async (req, res) => {
     const auctionId = generateAuctionId();
     const auction = new Auction(auctionId, title, description, startingBid, new Date(endTime), userId);
     
-    auctions.set(auctionId, auction);
-    
-    io.emit('auctionCreated', auction);
-    res.status(201).json(auction);
+    try {
+      auctions.set(auctionId, auction);
+      io.emit('auctionCreated', auction);
+      res.status(201).json(auction);
+    } catch (transactionError) {
+      auctions.delete(auctionId);
+      throw transactionError;
+    }
   } catch (error) {
+    console.error('Auction creation failed:', error);
     res.status(500).json({ error: 'Failed to create auction' });
   }
 });
 
 app.get('/api/auctions/:id', (req, res) => {
+
   const auction = auctions.get(req.params.id);
   if (!auction) {
     return res.status(404).json({ error: 'Auction not found' });
@@ -197,15 +203,29 @@ app.post('/api/bids', async (req, res) => {
     const bidId = uuidv4();
     const bid = new Bid(bidId, auctionId, bidderId, amount, encryptedBid);
     
-    bids.set(bidId, bid);
-    auction.addBid(bid);
-    
-    io.emit('bidPlaced', { auctionId, bidCount: auction.bids.length });
-    res.status(201).json({ message: 'Bid placed successfully', bidId });
+    // Transaction: Save state for potential rollback
+    const originalBidsLength = auction.bids.length;
+    const originalHighestBid = auction.currentHighestBid;
+
+    try {
+      bids.set(bidId, bid);
+      auction.addBid(bid);
+      
+      io.emit('bidPlaced', { auctionId, bidCount: auction.bids.length });
+      res.status(201).json({ message: 'Bid placed successfully', bidId });
+    } catch (transactionError) {
+      // Rollback on failure
+      bids.delete(bidId);
+      auction.bids.length = originalBidsLength;
+      auction.currentHighestBid = originalHighestBid;
+      throw transactionError;
+    }
   } catch (error) {
+    console.error('Bid placement failed:', error);
     res.status(500).json({ error: 'Failed to place bid' });
   }
 });
+
 
 app.post('/api/auctions/:id/close', (req, res) => {
   try {
