@@ -8,6 +8,7 @@ const bcrypt = require('bcrypt');
 const helmet = require('helmet');
 const cors = require('cors');
 const rateLimit = require('express-rate-limit');
+const jwt = require('jsonwebtoken');
 const { v4: uuidv4 } = require('uuid');
 const { Server, Keypair, TransactionBuilder, Networks, BASE_FEE, Asset } = require('stellar-sdk');
 const AuctionDatabase = require('./database');
@@ -110,6 +111,12 @@ let auctions = new Map();
 let bids = new Map();
 let users = new Map();
 
+// JWT Secret Key (in production, use environment variable)
+const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key-change-in-production';
+
+// JWT Token blacklist for logout functionality
+const tokenBlacklist = new Set();
+
 // Auction class
 class Auction {
   constructor(id, title, description, startingBid, endTime, creator) {
@@ -172,6 +179,37 @@ class User {
 // Helper functions
 function generateAuctionId() {
   return uuidv4();
+}
+
+// JWT Authentication Middleware
+function authenticateToken(req, res, next) {
+  const authHeader = req.headers['authorization'];
+  const token = authHeader && authHeader.split(' ')[1];
+
+  if (!token) {
+    return res.status(401).json({ error: 'Access token required' });
+  }
+
+  if (tokenBlacklist.has(token)) {
+    return res.status(401).json({ error: 'Token has been revoked' });
+  }
+
+  jwt.verify(token, JWT_SECRET, (err, user) => {
+    if (err) {
+      return res.status(403).json({ error: 'Invalid or expired token' });
+    }
+    req.user = user;
+    next();
+  });
+}
+
+// Generate JWT Token
+function generateToken(user) {
+  return jwt.sign(
+    { userId: user.id, username: user.username },
+    JWT_SECRET,
+    { expiresIn: '24h' }
+  );
 }
 
 function encryptBid(bidAmount, secretKey) {
@@ -308,29 +346,7 @@ app.get('/api/auctions',
   }
 });
 
-app.post('/api/auctions', 
-  auctionCreateLimiter,
-  validateRequest.body({
-    title: { type: 'title', required: true },
-    description: { type: 'description', required: true },
-    startingBid: { type: 'number', required: true, min: 0.01 },
-    endTime: { type: 'date', required: true, allowPast: false },
-    userId: { type: 'uuid', required: true }
-  }),
-  async (req, res) => {
-  try {
-    const { title, description, startingBid, endTime, userId } = req.sanitizedBody;
-    
-    // Additional business logic validation
-    if (startingBid > 10000000) {
-      return res.status(400).json({ error: 'Starting bid cannot exceed 10,000,000' });
-    }
-    
-    // Validate end time is not too far in the future (max 1 year)
-    const maxEndTime = new Date();
-    maxEndTime.setFullYear(maxEndTime.getFullYear() + 1);
-    if (endTime > maxEndTime) {
-      return res.status(400).json({ error: 'Auction end time cannot be more than 1 year in the future' });
+
     }
 
     const auctionId = generateAuctionId();
@@ -365,20 +381,7 @@ app.get('/api/auctions/:id',
     res.json(auction);
 });
 
-app.post('/api/bids', 
-  validateRequest.body({
-    auctionId: { type: 'uuid', required: true },
-    bidderId: { type: 'uuid', required: true },
-    amount: { type: 'bidAmount', required: true, minimumBid: 0.01 },
-    secretKey: { type: 'secretKey', required: true }
-  }),
-  async (req, res) => {
-  try {
-    const { auctionId, bidderId, amount, secretKey } = req.sanitizedBody;
-    
-    // Get auction from database
-    const auctionDb = db.getAuction(auctionId);
-    if (!auctionDb) {
+
       return res.status(404).json({ error: 'Auction not found' });
     }
 
@@ -420,11 +423,6 @@ app.post('/api/bids',
 });
 
 
-app.post('/api/auctions/:id/close', 
-  validateRequest.params({
-    id: { type: 'uuid', required: true }
-  }),
-  (req, res) => {
   try {
     const auctionId = req.sanitizedParams.id;
     
@@ -433,7 +431,7 @@ app.post('/api/auctions/:id/close',
       return res.status(404).json({ error: 'Auction not found' });
     }
 
-    if (auctionDb.status !== 'active') {
+
       return res.status(400).json({ error: 'Auction is already closed' });
     }
 
@@ -474,8 +472,7 @@ app.post('/api/users/register',
   try {
     const { username, password } = req.sanitizedBody;
     
-    // Check if user exists in database
-    const existingUser = db.getUserByUsername(username);
+
     if (existingUser) {
       return res.status(400).json({ error: 'Username already exists' });
     }
@@ -484,7 +481,7 @@ app.post('/api/users/register',
     // Create user in database
     db.createUser(userId, username, password);
     
-    res.status(201).json({ userId, username });
+
   } catch (error) {
     console.error('Error registering user:', error);
     res.status(500).json({ error: 'Failed to register user' });
@@ -511,11 +508,46 @@ app.post('/api/users/login',
       return res.status(401).json({ error: 'Invalid credentials' });
     }
 
-    res.json({ userId: user.id, username: user.username });
+    // Generate JWT token
+    const token = generateToken(user);
+    
+    res.json({ 
+      userId: user.id, 
+      username: user.username,
+      token: token,
+      expiresIn: '24h'
+    });
   } catch (error) {
     console.error('Error logging in user:', error);
     res.status(500).json({ error: 'Failed to login' });
   }
+});
+
+// New logout endpoint
+app.post('/api/users/logout', authenticateToken, (req, res) => {
+  try {
+    const authHeader = req.headers['authorization'];
+    const token = authHeader && authHeader.split(' ')[1];
+    
+    if (token) {
+      tokenBlacklist.add(token);
+    }
+    
+    res.json({ message: 'Logged out successfully' });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to logout' });
+  }
+});
+
+// New token validation endpoint
+app.get('/api/users/verify', authenticateToken, (req, res) => {
+  res.json({ 
+    valid: true, 
+    user: { 
+      userId: req.user.userId, 
+      username: req.user.username 
+    } 
+  });
 });
 
 // Socket.io connections
