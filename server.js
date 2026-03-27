@@ -94,25 +94,6 @@ const limiter = rateLimit({
 });
 app.use(limiter);
 
-// Stricter rate limits for sensitive endpoints
-const authLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 5, // limit each IP to 5 attempts per windowMs
-  message: { error: 'Too many authentication attempts, please try again later' }
-});
-
-const bidLimiter = rateLimit({
-  windowMs: 1 * 60 * 1000, // 1 minute
-  max: 10, // limit each IP to 10 bids per minute
-  message: { error: 'Too many bid attempts, please slow down' }
-});
-
-const auctionCreateLimiter = rateLimit({
-  windowMs: 1 * 60 * 1000, // 1 minute
-  max: 5, // limit each IP to 5 auction creations per minute
-  message: { error: 'Too many auction creation attempts, please slow down' }
-});
-
 // Backup directory
 const backupDir = path.join(__dirname, 'backups');
 
@@ -120,76 +101,6 @@ const backupDir = path.join(__dirname, 'backups');
 let auctions = new Map();
 let bids = new Map();
 let users = new Map();
-
-// JWT Secret Key (in production, use environment variable)
-const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key-change-in-production';
-
-// OAuth Configuration
-const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID;
-const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET;
-const GITHUB_CLIENT_ID = process.env.GITHUB_CLIENT_ID;
-const GITHUB_CLIENT_SECRET = process.env.GITHUB_CLIENT_SECRET;
-
-// Passport serialize/deserialize functions
-passport.serializeUser((user, done) => {
-  done(null, user.id);
-});
-
-passport.deserializeUser((id, done) => {
-  const user = users.get(id);
-  done(null, user);
-});
-
-// Google OAuth Strategy
-if (GOOGLE_CLIENT_ID && GOOGLE_CLIENT_SECRET) {
-  passport.use(new GoogleStrategy({
-    clientID: GOOGLE_CLIENT_ID,
-    clientSecret: GOOGLE_CLIENT_SECRET,
-    callbackURL: "/auth/google/callback"
-  },
-  (accessToken, refreshToken, profile, done) => {
-    try {
-      let user = Array.from(users.values()).find(u => u.provider === 'google' && u.providerId === profile.id);
-      
-      if (!user) {
-        const userId = uuidv4();
-        user = new User(userId, profile.displayName, null, profile.emails[0].value, 'google', profile.id);
-        users.set(userId, user);
-      }
-      
-      return done(null, user);
-    } catch (error) {
-      return done(error, null);
-    }
-  }));
-}
-
-// GitHub OAuth Strategy
-if (GITHUB_CLIENT_ID && GITHUB_CLIENT_SECRET) {
-  passport.use(new GitHubStrategy({
-    clientID: GITHUB_CLIENT_ID,
-    clientSecret: GITHUB_CLIENT_SECRET,
-    callbackURL: "/auth/github/callback"
-  },
-  (accessToken, refreshToken, profile, done) => {
-    try {
-      let user = Array.from(users.values()).find(u => u.provider === 'github' && u.providerId === profile.id);
-      
-      if (!user) {
-        const userId = uuidv4();
-        user = new User(userId, profile.username, null, profile.emails ? profile.emails[0].value : null, 'github', profile.id);
-        users.set(userId, user);
-      }
-      
-      return done(null, user);
-    } catch (error) {
-      return done(error, null);
-    }
-  }));
-}
-
-// JWT Token blacklist for logout functionality
-const tokenBlacklist = new Set();
 
 // Auction class
 class Auction {
@@ -317,18 +228,15 @@ function decryptBid(encryptedData, secretKey) {
 }
 
 // --- Backup and Restore ---
-async function backupData() {
+function backupData() {
   try {
     if (!fs.existsSync(backupDir)) {
       fs.mkdirSync(backupDir, { recursive: true });
     }
 
-    await Promise.all([
-      fs.promises.writeFile(path.join(backupDir, 'auctions.json'), JSON.stringify(Array.from(auctions.entries()), null, 2)),
-      fs.promises.writeFile(path.join(backupDir, 'bids.json'), JSON.stringify(Array.from(bids.entries()), null, 2)),
-      fs.promises.writeFile(path.join(backupDir, 'users.json'), JSON.stringify(Array.from(users.entries()), null, 2))
-    ]);
-
+    fs.writeFileSync(path.join(backupDir, 'auctions.json'), JSON.stringify(Array.from(auctions.entries()), null, 2));
+    fs.writeFileSync(path.join(backupDir, 'bids.json'), JSON.stringify(Array.from(bids.entries()), null, 2));
+    fs.writeFileSync(path.join(backupDir, 'users.json'), JSON.stringify(Array.from(users.entries()), null, 2));
     console.log(`[${new Date().toISOString()}] Data backup successful.`);
   } catch (error) {
     console.error('Data backup failed:', error);
@@ -443,19 +351,12 @@ app.get('/api/auctions',
   }
 });
 
-app.get('/api/auctions/:id', 
-  validateRequest.params({
-    id: { type: 'uuid', required: true }
-  }),
-  (req, res) => {
-    const auctionId = req.sanitizedParams.id;
-    
-    const auction = auctions.get(auctionId);
-    if (!auction) {
-      return res.status(404).json({ error: 'Auction not found' });
-    }
-    
-    res.json(auction);
+app.get('/api/auctions/:id', (req, res) => {
+
+  const auction = auctions.get(req.params.id);
+  if (!auction) {
+    return res.status(404).json({ error: 'Auction not found' });
+  }
 });
 
 
@@ -500,6 +401,7 @@ app.get('/api/auctions/:id',
 });
 
 
+app.post('/api/auctions/:id/close', (req, res) => {
   try {
     const auctionId = req.sanitizedParams.id;
     
