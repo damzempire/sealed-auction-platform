@@ -711,3 +711,544 @@ function openNotificationCenter() {
     }
 }
 
+
+// ============================================================
+// Issue #106 – Advanced Filtering UI
+// ============================================================
+
+let savedFilterPresets = JSON.parse(localStorage.getItem('filterPresets') || '[]');
+
+function getFilterState() {
+    const categories = [...document.querySelectorAll('.filter-category:checked')].map(el => el.value);
+    const statuses   = [...document.querySelectorAll('.filter-status:checked')].map(el => el.value);
+    return {
+        categories,
+        statuses,
+        priceMin: parseFloat(document.getElementById('filterPriceMin').value) || 0,
+        priceMax: parseFloat(document.getElementById('filterPriceMax').value) || Infinity,
+        dateFrom: document.getElementById('filterDateFrom').value,
+        dateTo:   document.getElementById('filterDateTo').value,
+        sort:     document.getElementById('filterSort').value,
+    };
+}
+
+function applyFilters() {
+    const f = getFilterState();
+    let results = [...auctions];
+
+    if (f.categories.length) {
+        results = results.filter(a => f.categories.includes((a.category || 'other').toLowerCase()));
+    }
+    if (f.statuses.length) {
+        results = results.filter(a => {
+            const status = a.status || (new Date(a.endTime) > new Date() ? 'active' : 'closed');
+            return f.statuses.includes(status);
+        });
+    }
+    results = results.filter(a => {
+        const price = parseFloat(a.startingBid || a.currentBid || 0);
+        return price >= f.priceMin && price <= f.priceMax;
+    });
+    if (f.dateFrom) results = results.filter(a => new Date(a.endTime) >= new Date(f.dateFrom));
+    if (f.dateTo)   results = results.filter(a => new Date(a.endTime) <= new Date(f.dateTo + 'T23:59:59'));
+
+    const sortFns = {
+        newest:     (a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0),
+        oldest:     (a, b) => new Date(a.createdAt || 0) - new Date(b.createdAt || 0),
+        'price-asc':  (a, b) => (a.startingBid || 0) - (b.startingBid || 0),
+        'price-desc': (a, b) => (b.startingBid || 0) - (a.startingBid || 0),
+        'ending-soon':(a, b) => new Date(a.endTime) - new Date(b.endTime),
+        'most-bids':  (a, b) => (b.bidCount || 0) - (a.bidCount || 0),
+    };
+    if (sortFns[f.sort]) results.sort(sortFns[f.sort]);
+
+    renderFilterResults(results);
+}
+
+function renderFilterResults(results) {
+    const container = document.getElementById('filterResults');
+    const grid      = document.getElementById('filterResultsGrid');
+    const count     = document.getElementById('filterResultCount');
+    container.classList.remove('hidden');
+    count.textContent = `(${results.length} found)`;
+    if (!results.length) {
+        grid.innerHTML = '<p class="text-gray-500 col-span-full">No auctions match your filters.</p>';
+        return;
+    }
+    grid.innerHTML = results.map(a => `
+        <div class="glass-effect rounded-xl p-4 cursor-pointer hover:ring-2 hover:ring-purple-500 transition-all" onclick="switchTab('auctions')">
+            <h4 class="font-semibold truncate">${a.title || 'Untitled'}</h4>
+            <p class="text-sm text-gray-400 mt-1">Starting: $${a.startingBid || 0}</p>
+            <p class="text-xs text-gray-500 mt-1">Ends: ${a.endTime ? new Date(a.endTime).toLocaleDateString() : 'N/A'}</p>
+            <span class="inline-block mt-2 text-xs px-2 py-0.5 rounded-full ${(a.status || 'active') === 'active' ? 'bg-green-500/20 text-green-400' : 'bg-gray-500/20 text-gray-400'}">${a.status || 'active'}</span>
+        </div>`).join('');
+}
+
+function resetFilters() {
+    document.querySelectorAll('.filter-category, .filter-status').forEach(el => { el.checked = false; });
+    document.querySelector('.filter-status[value="active"]').checked = true;
+    document.getElementById('filterPriceMin').value = '';
+    document.getElementById('filterPriceMax').value = '';
+    document.getElementById('filterPriceSlider').value = 100000;
+    document.getElementById('filterDateFrom').value = '';
+    document.getElementById('filterDateTo').value = '';
+    document.getElementById('filterSort').value = 'newest';
+    document.getElementById('filterResults').classList.add('hidden');
+}
+
+function saveFilterPreset() {
+    const name = prompt('Enter a name for this preset:');
+    if (!name) return;
+    const preset = { name, ...getFilterState() };
+    savedFilterPresets.push(preset);
+    localStorage.setItem('filterPresets', JSON.stringify(savedFilterPresets));
+    renderFilterPresets();
+}
+
+function loadFilterPreset(index) {
+    const p = savedFilterPresets[index];
+    if (!p) return;
+    document.querySelectorAll('.filter-category').forEach(el => { el.checked = p.categories.includes(el.value); });
+    document.querySelectorAll('.filter-status').forEach(el => { el.checked = p.statuses.includes(el.value); });
+    document.getElementById('filterPriceMin').value = p.priceMin || '';
+    document.getElementById('filterPriceMax').value = p.priceMax === Infinity ? '' : p.priceMax;
+    document.getElementById('filterDateFrom').value = p.dateFrom || '';
+    document.getElementById('filterDateTo').value   = p.dateTo   || '';
+    document.getElementById('filterSort').value     = p.sort     || 'newest';
+}
+
+function deleteFilterPreset(index) {
+    savedFilterPresets.splice(index, 1);
+    localStorage.setItem('filterPresets', JSON.stringify(savedFilterPresets));
+    renderFilterPresets();
+}
+
+function renderFilterPresets() {
+    const container = document.getElementById('filterPresets');
+    if (!container) return;
+    if (!savedFilterPresets.length) {
+        container.innerHTML = '<span class="text-gray-500 text-sm">No saved presets yet.</span>';
+        return;
+    }
+    container.innerHTML = savedFilterPresets.map((p, i) => `
+        <div class="flex items-center gap-1">
+            <button onclick="loadFilterPreset(${i})" class="bg-purple-600/30 hover:bg-purple-600/60 text-white px-3 py-1 rounded-lg text-sm transition-colors">${p.name}</button>
+            <button onclick="deleteFilterPreset(${i})" class="text-red-400 hover:text-red-300 text-xs px-1" title="Delete"><i class="fas fa-times"></i></button>
+        </div>`).join('');
+}
+
+// Initialise presets on load
+document.addEventListener('DOMContentLoaded', renderFilterPresets);
+
+
+// ============================================================
+// Issue #107 – Map Integration
+// ============================================================
+
+let userLocation = null;
+let mapAuctions  = [];
+
+function locateMe() {
+    const status = document.getElementById('mapStatus');
+    if (!navigator.geolocation) {
+        status.textContent = 'Geolocation is not supported by your browser.';
+        return;
+    }
+    status.textContent = 'Locating…';
+    navigator.geolocation.getCurrentPosition(
+        pos => {
+            userLocation = { lat: pos.coords.latitude, lng: pos.coords.longitude };
+            status.textContent = `📍 Location found: ${userLocation.lat.toFixed(4)}, ${userLocation.lng.toFixed(4)}`;
+            renderNearbyAuctions();
+        },
+        err => {
+            status.textContent = `Could not get location: ${err.message}`;
+        }
+    );
+}
+
+function updateMapRadius() {
+    if (userLocation) renderNearbyAuctions();
+}
+
+function haversineKm(lat1, lng1, lat2, lng2) {
+    const R = 6371;
+    const dLat = (lat2 - lat1) * Math.PI / 180;
+    const dLng = (lng2 - lng1) * Math.PI / 180;
+    const a = Math.sin(dLat/2)**2 + Math.cos(lat1*Math.PI/180)*Math.cos(lat2*Math.PI/180)*Math.sin(dLng/2)**2;
+    return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+}
+
+function renderNearbyAuctions() {
+    const container = document.getElementById('nearbyAuctions');
+    const radius    = parseFloat(document.getElementById('mapRadiusFilter').value);
+    const markers   = document.getElementById('mapMarkers');
+
+    // Attach mock coordinates to auctions that don't have them
+    const withCoords = auctions.map((a, i) => ({
+        ...a,
+        lat: a.lat || (userLocation ? userLocation.lat + (Math.random()-0.5)*0.5 : 51.5 + (Math.random()-0.5)*0.5),
+        lng: a.lng || (userLocation ? userLocation.lng + (Math.random()-0.5)*0.5 : -0.1 + (Math.random()-0.5)*0.5),
+    }));
+
+    let nearby = withCoords;
+    if (userLocation && radius > 0) {
+        nearby = withCoords.filter(a => haversineKm(userLocation.lat, userLocation.lng, a.lat, a.lng) <= radius);
+    }
+    nearby.sort((a, b) => {
+        if (!userLocation) return 0;
+        return haversineKm(userLocation.lat, userLocation.lng, a.lat, a.lng) -
+               haversineKm(userLocation.lat, userLocation.lng, b.lat, b.lng);
+    });
+
+    // Render map markers as a simple visual list
+    if (markers) {
+        markers.innerHTML = nearby.slice(0, 5).map(a => {
+            const dist = userLocation ? haversineKm(userLocation.lat, userLocation.lng, a.lat, a.lng).toFixed(1) + ' km' : '';
+            return `<div class="flex items-center gap-2 text-sm text-left mb-1">
+                <i class="fas fa-map-pin text-purple-400"></i>
+                <span class="font-medium">${a.title || 'Auction'}</span>
+                ${dist ? `<span class="text-gray-400 ml-auto">${dist}</span>` : ''}
+            </div>`;
+        }).join('') || '<p class="text-gray-400 text-sm">No auctions in range.</p>';
+    }
+
+    if (!nearby.length) {
+        container.innerHTML = '<p class="text-gray-500 text-sm col-span-full">No auctions found in this area.</p>';
+        return;
+    }
+    container.innerHTML = nearby.slice(0, 9).map(a => {
+        const dist = userLocation ? `${haversineKm(userLocation.lat, userLocation.lng, a.lat, a.lng).toFixed(1)} km away` : '';
+        return `<div class="glass-effect rounded-xl p-4 cursor-pointer hover:ring-2 hover:ring-purple-500 transition-all" onclick="switchTab('auctions')">
+            <h4 class="font-semibold truncate">${a.title || 'Untitled'}</h4>
+            ${dist ? `<p class="text-xs text-purple-400 mt-1"><i class="fas fa-map-marker-alt mr-1"></i>${dist}</p>` : ''}
+            <p class="text-sm text-gray-400 mt-1">$${a.startingBid || 0}</p>
+        </div>`;
+    }).join('');
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+    const searchInput = document.getElementById('mapLocationSearch');
+    if (searchInput) {
+        searchInput.addEventListener('keydown', e => {
+            if (e.key === 'Enter') {
+                document.getElementById('mapStatus').textContent = `Searching for "${searchInput.value}"… (requires geocoding API)`;
+            }
+        });
+    }
+});
+
+
+// ============================================================
+// Issue #108 – Video Streaming Support
+// ============================================================
+
+let videoPlaylistData = [];
+let currentVideoIndex = -1;
+let videoViewCounts   = JSON.parse(localStorage.getItem('videoViews') || '{}');
+let autoplayEnabled   = false;
+
+function loadVideoPlaylist() {
+    // Build playlist from current auctions (using placeholder video URLs)
+    videoPlaylistData = auctions.slice(0, 12).map((a, i) => ({
+        id:        a.id || i,
+        title:     a.title || `Auction #${i+1}`,
+        thumbnail: `https://picsum.photos/seed/${a.id || i}/320/180`,
+        // In production these would be real streaming URLs
+        url:       '',
+        duration:  `${Math.floor(Math.random()*3)+1}:${String(Math.floor(Math.random()*60)).padStart(2,'0')}`,
+        views:     videoViewCounts[a.id || i] || Math.floor(Math.random()*500),
+    }));
+    renderVideoPlaylist();
+    renderThumbnailGallery();
+}
+
+function renderVideoPlaylist() {
+    const container = document.getElementById('videoPlaylist');
+    if (!container) return;
+    if (!videoPlaylistData.length) {
+        container.innerHTML = '<p class="text-gray-500 text-sm">No auction previews available.</p>';
+        return;
+    }
+    container.innerHTML = videoPlaylistData.map((v, i) => `
+        <div class="flex gap-3 p-2 rounded-lg cursor-pointer hover:bg-white/10 transition-colors ${currentVideoIndex===i?'ring-2 ring-purple-500':''}" onclick="playVideo(${i})">
+            <div class="relative flex-shrink-0 w-20 h-12 rounded overflow-hidden bg-gray-800">
+                <img src="${v.thumbnail}" alt="${v.title}" class="w-full h-full object-cover" onerror="this.style.display='none'">
+                <span class="absolute bottom-0.5 right-0.5 text-xs bg-black/70 px-1 rounded">${v.duration}</span>
+            </div>
+            <div class="flex-1 min-w-0">
+                <p class="text-sm font-medium truncate">${v.title}</p>
+                <p class="text-xs text-gray-400">${v.views} views</p>
+            </div>
+        </div>`).join('');
+}
+
+function renderThumbnailGallery() {
+    const container = document.getElementById('thumbnailGallery');
+    if (!container) return;
+    container.innerHTML = videoPlaylistData.map((v, i) => `
+        <div class="relative cursor-pointer rounded-lg overflow-hidden aspect-video bg-gray-800 hover:ring-2 hover:ring-purple-500 transition-all" onclick="playVideo(${i})">
+            <img src="${v.thumbnail}" alt="${v.title}" class="w-full h-full object-cover" onerror="this.style.display='none'">
+            <div class="absolute inset-0 flex items-center justify-center bg-black/30 hover:bg-black/10 transition-colors">
+                <i class="fas fa-play text-white text-xl"></i>
+            </div>
+            <p class="absolute bottom-0 left-0 right-0 text-xs text-white bg-black/60 px-2 py-1 truncate">${v.title}</p>
+        </div>`).join('');
+}
+
+function playVideo(index) {
+    const v = videoPlaylistData[index];
+    if (!v) return;
+    currentVideoIndex = index;
+
+    const mainVideo   = document.getElementById('mainVideo');
+    const placeholder = document.getElementById('videoPlaceholder');
+    const overlay     = document.getElementById('videoOverlay');
+    const titleEl     = document.getElementById('videoTitle');
+    const viewsEl     = document.getElementById('videoViews');
+    const analyticsEl = document.getElementById('videoAnalytics');
+
+    // Track views
+    videoViewCounts[v.id] = (videoViewCounts[v.id] || 0) + 1;
+    localStorage.setItem('videoViews', JSON.stringify(videoViewCounts));
+    v.views = videoViewCounts[v.id];
+
+    if (v.url) {
+        mainVideo.src = v.url;
+        mainVideo.classList.remove('hidden');
+        placeholder.classList.add('hidden');
+        mainVideo.play().catch(() => {});
+    } else {
+        // No real URL – show placeholder with info
+        mainVideo.classList.add('hidden');
+        placeholder.classList.remove('hidden');
+        placeholder.innerHTML = `
+            <img src="${v.thumbnail}" alt="${v.title}" class="w-full h-full object-cover absolute inset-0 opacity-30">
+            <div class="relative z-10 text-center p-8">
+                <i class="fas fa-play-circle text-6xl text-purple-400 mb-4"></i>
+                <p class="text-lg font-semibold">${v.title}</p>
+                <p class="text-gray-400 text-sm mt-2">Live streaming preview – ${v.duration}</p>
+            </div>`;
+    }
+
+    overlay.classList.remove('hidden');
+    titleEl.textContent = v.title;
+    viewsEl.textContent = `${v.views} views`;
+    analyticsEl.textContent = `Watching: ${v.title} | Quality: ${document.getElementById('videoQualitySelect').value}`;
+
+    renderVideoPlaylist(); // refresh to highlight current
+}
+
+function changeVideoQuality() {
+    const q = document.getElementById('videoQualitySelect').value;
+    const analyticsEl = document.getElementById('videoAnalytics');
+    if (analyticsEl && currentVideoIndex >= 0) {
+        analyticsEl.textContent = `Quality changed to ${q}`;
+    }
+}
+
+function toggleAutoplay() {
+    autoplayEnabled = document.getElementById('autoplayToggle').checked;
+}
+
+// Load playlist when video tab is opened
+const _origSwitchTab = typeof switchTab === 'function' ? switchTab : null;
+// Patch switchTab to lazy-load video playlist
+(function patchSwitchTab() {
+    const orig = window.switchTab;
+    window.switchTab = function(tabName) {
+        orig(tabName);
+        if (tabName === 'video' && !videoPlaylistData.length) loadVideoPlaylist();
+        if (tabName === 'map'   && userLocation) renderNearbyAuctions();
+        if (tabName === 'filter') renderFilterPresets();
+    };
+})();
+
+
+// ============================================================
+// Issue #109 – Voice Commands
+// ============================================================
+
+let voiceRecognition  = null;
+let voiceActive       = false;
+let voiceHistory      = [];
+const VOICE_COMMANDS  = {
+    'show auctions':  () => switchTab('auctions'),
+    'auctions':       () => switchTab('auctions'),
+    'create auction': () => switchTab('create'),
+    'create':         () => switchTab('create'),
+    'my bids':        () => switchTab('myBids'),
+    'bids':           () => switchTab('myBids'),
+    'open filter':    () => switchTab('filter'),
+    'filter':         () => switchTab('filter'),
+    'open map':       () => switchTab('map'),
+    'map':            () => switchTab('map'),
+    'open video':     () => switchTab('video'),
+    'video':          () => switchTab('video'),
+    'voice':          () => switchTab('voice'),
+    'scroll down':    () => window.scrollBy({ top: 400, behavior: 'smooth' }),
+    'scroll up':      () => window.scrollBy({ top: -400, behavior: 'smooth' }),
+    'stop listening': () => stopVoiceRecognition(),
+    'stop':           () => stopVoiceRecognition(),
+    'help':           () => { switchTab('voice'); speakFeedback('Available commands: show auctions, create auction, my bids, open filter, open map, open video, scroll down, scroll up, stop listening.'); },
+};
+
+function initVoiceRecognition() {
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    const noteEl = document.getElementById('voiceSupportNote');
+    if (!SpeechRecognition) {
+        if (noteEl) noteEl.textContent = 'Speech recognition is not supported in this browser. Try Chrome or Edge.';
+        return null;
+    }
+    if (noteEl) noteEl.textContent = 'Speech recognition is supported in this browser.';
+    const recognition = new SpeechRecognition();
+    recognition.continuous    = true;
+    recognition.interimResults = true;
+    recognition.lang          = 'en-US';
+
+    recognition.onresult = e => {
+        let interim = '';
+        let final   = '';
+        for (let i = e.resultIndex; i < e.results.length; i++) {
+            const t = e.results[i][0].transcript.trim().toLowerCase();
+            if (e.results[i].isFinal) final += t;
+            else interim += t;
+        }
+        document.getElementById('voiceTranscript').textContent = interim || final;
+        if (final) processVoiceCommand(final);
+    };
+
+    recognition.onerror = e => {
+        setVoiceStatus(`Error: ${e.error}`, false);
+        voiceActive = false;
+        updateVoiceButton();
+    };
+
+    recognition.onend = () => {
+        if (voiceActive) recognition.start(); // keep alive
+    };
+
+    return recognition;
+}
+
+function processVoiceCommand(transcript) {
+    const text = transcript.toLowerCase().trim();
+    let matched = false;
+
+    // Check for search command
+    const searchMatch = text.match(/^search (.+)$/);
+    if (searchMatch) {
+        const term = searchMatch[1];
+        addVoiceHistory(text, `Searching for "${term}"`);
+        speakFeedback(`Searching for ${term}`);
+        switchTab('auctions');
+        matched = true;
+    }
+
+    if (!matched) {
+        for (const [cmd, fn] of Object.entries(VOICE_COMMANDS)) {
+            if (text.includes(cmd)) {
+                fn();
+                const response = `Executed: ${cmd}`;
+                addVoiceHistory(text, response);
+                speakFeedback(response);
+                matched = true;
+                break;
+            }
+        }
+    }
+
+    if (!matched) {
+        addVoiceHistory(text, 'Command not recognised');
+    }
+}
+
+function addVoiceHistory(command, response) {
+    voiceHistory.unshift({ command, response, time: new Date().toLocaleTimeString() });
+    if (voiceHistory.length > 20) voiceHistory.pop();
+
+    const feedback = document.getElementById('voiceFeedback');
+    const lastCmd  = document.getElementById('voiceLastCommand');
+    const lastResp = document.getElementById('voiceResponse');
+    if (feedback) feedback.classList.remove('hidden');
+    if (lastCmd)  lastCmd.textContent  = command;
+    if (lastResp) lastResp.textContent = response;
+
+    renderVoiceHistory();
+}
+
+function renderVoiceHistory() {
+    const container = document.getElementById('voiceHistory');
+    if (!container) return;
+    if (!voiceHistory.length) {
+        container.innerHTML = '<p class="text-gray-500">No commands yet.</p>';
+        return;
+    }
+    container.innerHTML = voiceHistory.map(h => `
+        <div class="flex justify-between gap-2">
+            <span class="text-purple-300">"${h.command}"</span>
+            <span class="text-gray-500 text-xs whitespace-nowrap">${h.time}</span>
+        </div>
+        <div class="text-gray-400 text-xs mb-1">${h.response}</div>`).join('');
+}
+
+function clearVoiceHistory() {
+    voiceHistory = [];
+    renderVoiceHistory();
+}
+
+function speakFeedback(text) {
+    if (!window.speechSynthesis) return;
+    const utt = new SpeechSynthesisUtterance(text);
+    utt.rate   = 1.1;
+    utt.volume = 0.8;
+    window.speechSynthesis.speak(utt);
+}
+
+function setVoiceStatus(text, active) {
+    const statusEl = document.getElementById('voiceStatus');
+    if (statusEl) statusEl.textContent = text;
+    voiceActive = active;
+    updateVoiceButton();
+}
+
+function updateVoiceButton() {
+    const btn = document.getElementById('voiceBtn');
+    if (!btn) return;
+    if (voiceActive) {
+        btn.classList.add('animate-pulse', 'bg-red-600');
+        btn.classList.remove('bg-purple-600');
+        btn.title = 'Stop listening';
+    } else {
+        btn.classList.remove('animate-pulse', 'bg-red-600');
+        btn.classList.add('bg-purple-600');
+        btn.title = 'Start voice recognition';
+    }
+}
+
+function toggleVoiceRecognition() {
+    if (voiceActive) {
+        stopVoiceRecognition();
+    } else {
+        startVoiceRecognition();
+    }
+}
+
+function startVoiceRecognition() {
+    if (!voiceRecognition) voiceRecognition = initVoiceRecognition();
+    if (!voiceRecognition) {
+        setVoiceStatus('Speech recognition not supported in this browser.', false);
+        return;
+    }
+    voiceActive = true;
+    updateVoiceButton();
+    setVoiceStatus('Listening… speak a command', true);
+    voiceRecognition.start();
+}
+
+function stopVoiceRecognition() {
+    voiceActive = false;
+    if (voiceRecognition) voiceRecognition.stop();
+    setVoiceStatus('Click to start listening', false);
+    document.getElementById('voiceTranscript').textContent = '';
+}
