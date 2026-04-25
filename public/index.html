@@ -572,7 +572,27 @@
 
         <!-- Navigation Tabs -->
         <div class="glass-effect rounded-xl p-1 mb-8">
-<
+            <div class="flex flex-wrap gap-1">
+                <button data-tab="auctions" onclick="switchTab('auctions')" class="bg-purple-600 text-white px-4 py-2 rounded-lg transition-colors text-sm font-medium">
+                    <i class="fas fa-gavel mr-2"></i>Auctions
+                </button>
+                <button data-tab="create" onclick="switchTab('create')" class="bg-transparent text-gray-600 px-4 py-2 rounded-lg transition-colors text-sm font-medium hover:bg-white/20">
+                    <i class="fas fa-plus mr-2"></i>Create
+                </button>
+                <button data-tab="myBids" onclick="switchTab('myBids')" class="bg-transparent text-gray-600 px-4 py-2 rounded-lg transition-colors text-sm font-medium hover:bg-white/20">
+                    <i class="fas fa-hand-paper mr-2"></i>My Bids
+                </button>
+                <button data-tab="filter" onclick="switchTab('filter')" class="bg-transparent text-gray-600 px-4 py-2 rounded-lg transition-colors text-sm font-medium hover:bg-white/20">
+                    <i class="fas fa-filter mr-2"></i>Filter
+                </button>
+                <button data-tab="map" onclick="switchTab('map')" class="bg-transparent text-gray-600 px-4 py-2 rounded-lg transition-colors text-sm font-medium hover:bg-white/20">
+                    <i class="fas fa-map-marker-alt mr-2"></i>Map
+                </button>
+                <button data-tab="video" onclick="switchTab('video')" class="bg-transparent text-gray-600 px-4 py-2 rounded-lg transition-colors text-sm font-medium hover:bg-white/20">
+                    <i class="fas fa-video mr-2"></i>Video
+                </button>
+                <button data-tab="voice" onclick="switchTab('voice')" class="bg-transparent text-gray-600 px-4 py-2 rounded-lg transition-colors text-sm font-medium hover:bg-white/20">
+                    <i class="fas fa-microphone mr-2"></i>Voice
                 </button>
             </div>
         </div>
@@ -605,6 +625,271 @@
         <div id="myBidsContent" class="tab-content hidden">
 
                     <!-- User's bids will be displayed here -->
+                </div>
+            </div>
+        </div>
+
+        <!-- Advanced Filtering Tab (#106) -->
+        <div id="filterContent" class="tab-content hidden">
+            <div class="glass-effect rounded-xl p-4 sm:p-6 max-w-4xl mx-auto">
+                <h2 class="text-xl sm:text-2xl font-bold mb-6"><i class="fas fa-filter mr-2"></i>Advanced Filtering</h2>
+
+                <!-- Saved Presets -->
+                <div class="mb-6">
+                    <div class="flex items-center justify-between mb-3">
+                        <h3 class="font-semibold text-lg">Saved Presets</h3>
+                        <button onclick="saveFilterPreset()" class="bg-purple-600 hover:bg-purple-700 text-white px-3 py-1 rounded-lg text-sm transition-colors">
+                            <i class="fas fa-save mr-1"></i>Save Current
+                        </button>
+                    </div>
+                    <div id="filterPresets" class="flex flex-wrap gap-2">
+                        <span class="text-gray-500 text-sm">No saved presets yet.</span>
+                    </div>
+                </div>
+
+                <!-- Filter Controls -->
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-6 mb-6">
+                    <!-- Category Multi-select -->
+                    <div>
+                        <label class="block font-semibold mb-2">Categories</label>
+                        <div id="categoryFilters" class="flex flex-wrap gap-2">
+                            <label class="flex items-center gap-1 cursor-pointer"><input type="checkbox" value="electronics" class="filter-category"> Electronics</label>
+                            <label class="flex items-center gap-1 cursor-pointer"><input type="checkbox" value="art" class="filter-category"> Art</label>
+                            <label class="flex items-center gap-1 cursor-pointer"><input type="checkbox" value="collectibles" class="filter-category"> Collectibles</label>
+                            <label class="flex items-center gap-1 cursor-pointer"><input type="checkbox" value="vehicles" class="filter-category"> Vehicles</label>
+                            <label class="flex items-center gap-1 cursor-pointer"><input type="checkbox" value="real-estate" class="filter-category"> Real Estate</label>
+                            <label class="flex items-center gap-1 cursor-pointer"><input type="checkbox" value="other" class="filter-category"> Other</label>
+                        </div>
+                    </div>
+
+                    <!-- Status Filter -->
+                    <div>
+                        <label class="block font-semibold mb-2">Status</label>
+                        <div class="flex flex-wrap gap-2">
+                            <label class="flex items-center gap-1 cursor-pointer"><input type="checkbox" value="active" class="filter-status" checked> Active</label>
+                            <label class="flex items-center gap-1 cursor-pointer"><input type="checkbox" value="closed" class="filter-status"> Closed</label>
+                            <label class="flex items-center gap-1 cursor-pointer"><input type="checkbox" value="upcoming" class="filter-status"> Upcoming</label>
+                        </div>
+                    </div>
+
+                    <!-- Price Range -->
+                    <div>
+                        <label class="block font-semibold mb-2">Price Range ($)</label>
+                        <div class="flex items-center gap-3">
+                            <input type="number" id="filterPriceMin" placeholder="Min" min="0" class="form-input w-full p-2 rounded-lg border">
+                            <span>–</span>
+                            <input type="number" id="filterPriceMax" placeholder="Max" min="0" class="form-input w-full p-2 rounded-lg border">
+                        </div>
+                        <input type="range" id="filterPriceSlider" min="0" max="100000" step="100" value="100000"
+                            class="w-full mt-2 accent-purple-600" oninput="document.getElementById('filterPriceMax').value=this.value">
+                        <div class="flex justify-between text-xs text-gray-500 mt-1"><span>$0</span><span>$100,000</span></div>
+                    </div>
+
+                    <!-- Date Range -->
+                    <div>
+                        <label class="block font-semibold mb-2">End Date Range</label>
+                        <div class="flex flex-col gap-2">
+                            <input type="date" id="filterDateFrom" class="form-input p-2 rounded-lg border w-full">
+                            <input type="date" id="filterDateTo" class="form-input p-2 rounded-lg border w-full">
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Sort -->
+                <div class="mb-6">
+                    <label class="block font-semibold mb-2">Sort By</label>
+                    <select id="filterSort" class="form-input p-2 rounded-lg border w-full sm:w-auto">
+                        <option value="newest">Newest First</option>
+                        <option value="oldest">Oldest First</option>
+                        <option value="price-asc">Price: Low to High</option>
+                        <option value="price-desc">Price: High to Low</option>
+                        <option value="ending-soon">Ending Soon</option>
+                        <option value="most-bids">Most Bids</option>
+                    </select>
+                </div>
+
+                <!-- Actions -->
+                <div class="flex gap-3">
+                    <button onclick="applyFilters()" class="bg-purple-600 hover:bg-purple-700 text-white px-6 py-2 rounded-lg transition-colors font-semibold">
+                        <i class="fas fa-search mr-2"></i>Apply Filters
+                    </button>
+                    <button onclick="resetFilters()" class="bg-gray-500 hover:bg-gray-600 text-white px-6 py-2 rounded-lg transition-colors">
+                        <i class="fas fa-undo mr-2"></i>Reset
+                    </button>
+                </div>
+
+                <!-- Filter Results -->
+                <div id="filterResults" class="mt-8 hidden">
+                    <h3 class="font-semibold text-lg mb-4">Results <span id="filterResultCount" class="text-purple-600"></span></h3>
+                    <div id="filterResultsGrid" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4"></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Map Integration Tab (#107) -->
+        <div id="mapContent" class="tab-content hidden">
+            <div class="glass-effect rounded-xl p-4 sm:p-6">
+                <h2 class="text-xl sm:text-2xl font-bold mb-4"><i class="fas fa-map-marker-alt mr-2"></i>Auction Map</h2>
+
+                <!-- Search & Controls -->
+                <div class="flex flex-col sm:flex-row gap-3 mb-4">
+                    <div class="flex-1 relative">
+                        <input type="text" id="mapLocationSearch" placeholder="Search location..." class="form-input w-full p-2 pl-9 rounded-lg border">
+                        <i class="fas fa-search absolute left-3 top-3 text-gray-400"></i>
+                    </div>
+                    <button onclick="locateMe()" class="bg-purple-600 hover:bg-purple-700 text-white px-4 py-2 rounded-lg transition-colors whitespace-nowrap">
+                        <i class="fas fa-crosshairs mr-2"></i>My Location
+                    </button>
+                    <select id="mapRadiusFilter" class="form-input p-2 rounded-lg border" onchange="updateMapRadius()">
+                        <option value="10">10 km</option>
+                        <option value="25" selected>25 km</option>
+                        <option value="50">50 km</option>
+                        <option value="100">100 km</option>
+                        <option value="0">Any distance</option>
+                    </select>
+                </div>
+
+                <!-- Map Container -->
+                <div id="mapContainer" class="w-full rounded-xl overflow-hidden border border-white/20 mb-4" style="height:420px; background: linear-gradient(135deg,#1a1a2e,#16213e);">
+                    <div class="flex flex-col items-center justify-center h-full text-center p-6">
+                        <i class="fas fa-map text-6xl text-purple-400 mb-4"></i>
+                        <p class="text-lg font-semibold mb-2">Interactive Map</p>
+                        <p class="text-gray-400 text-sm mb-4">Click "My Location" to center the map on your position, or search for a location above.</p>
+                        <div id="mapStatus" class="text-sm text-purple-300"></div>
+                        <!-- Map markers will be rendered here via canvas/SVG in a real integration -->
+                        <div id="mapMarkers" class="mt-4 w-full max-w-md"></div>
+                    </div>
+                </div>
+
+                <!-- Nearby Auctions List -->
+                <div>
+                    <h3 class="font-semibold text-lg mb-3">Nearby Auctions</h3>
+                    <div id="nearbyAuctions" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                        <p class="text-gray-500 text-sm col-span-full">Enable location to see nearby auctions.</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Video Streaming Tab (#108) -->
+        <div id="videoContent" class="tab-content hidden">
+            <div class="glass-effect rounded-xl p-4 sm:p-6">
+                <h2 class="text-xl sm:text-2xl font-bold mb-4"><i class="fas fa-video mr-2"></i>Auction Video Previews</h2>
+
+                <!-- Video Player -->
+                <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                    <div class="lg:col-span-2">
+                        <div id="videoPlayer" class="w-full rounded-xl overflow-hidden bg-black aspect-video flex items-center justify-center relative">
+                            <video id="mainVideo" class="w-full h-full hidden" controls preload="metadata">
+                                Your browser does not support the video tag.
+                            </video>
+                            <div id="videoPlaceholder" class="flex flex-col items-center justify-center text-center p-8">
+                                <i class="fas fa-play-circle text-6xl text-purple-400 mb-4"></i>
+                                <p class="text-lg font-semibold">Select a video to play</p>
+                                <p class="text-gray-400 text-sm mt-2">Choose an auction preview from the list</p>
+                            </div>
+                            <!-- Video overlay controls -->
+                            <div id="videoOverlay" class="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/80 to-transparent p-4 hidden">
+                                <p id="videoTitle" class="font-semibold text-white text-sm"></p>
+                                <div class="flex items-center gap-2 mt-1">
+                                    <span id="videoQuality" class="text-xs bg-purple-600 px-2 py-0.5 rounded">HD</span>
+                                    <span id="videoViews" class="text-xs text-gray-300"></span>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Playback Controls -->
+                        <div class="mt-3 flex items-center gap-3 flex-wrap">
+                            <select id="videoQualitySelect" class="form-input p-1.5 rounded-lg border text-sm" onchange="changeVideoQuality()">
+                                <option value="auto">Auto Quality</option>
+                                <option value="1080p">1080p HD</option>
+                                <option value="720p" selected>720p HD</option>
+                                <option value="480p">480p SD</option>
+                                <option value="360p">360p</option>
+                            </select>
+                            <label class="flex items-center gap-2 text-sm cursor-pointer">
+                                <input type="checkbox" id="autoplayToggle" onchange="toggleAutoplay()"> Autoplay
+                            </label>
+                            <span id="videoAnalytics" class="text-xs text-gray-400 ml-auto"></span>
+                        </div>
+                    </div>
+
+                    <!-- Video Playlist -->
+                    <div>
+                        <h3 class="font-semibold mb-3">Auction Previews</h3>
+                        <div id="videoPlaylist" class="space-y-3 max-h-96 overflow-y-auto pr-1">
+                            <!-- Populated by JS -->
+                        </div>
+                        <button onclick="loadVideoPlaylist()" class="mt-3 w-full bg-purple-600 hover:bg-purple-700 text-white py-2 rounded-lg transition-colors text-sm">
+                            <i class="fas fa-sync mr-2"></i>Refresh Previews
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Thumbnail Gallery -->
+                <div class="mt-6">
+                    <h3 class="font-semibold mb-3">Thumbnail Gallery</h3>
+                    <div id="thumbnailGallery" class="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-6 gap-3">
+                        <!-- Populated by JS -->
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Voice Commands Tab (#109) -->
+        <div id="voiceContent" class="tab-content hidden">
+            <div class="glass-effect rounded-xl p-4 sm:p-6 max-w-2xl mx-auto">
+                <h2 class="text-xl sm:text-2xl font-bold mb-4"><i class="fas fa-microphone mr-2"></i>Voice Commands</h2>
+
+                <!-- Microphone Status -->
+                <div class="flex flex-col items-center py-8">
+                    <button id="voiceBtn" onclick="toggleVoiceRecognition()" class="w-24 h-24 rounded-full bg-purple-600 hover:bg-purple-700 text-white text-4xl flex items-center justify-center transition-all shadow-lg mb-4" title="Start voice recognition">
+                        <i class="fas fa-microphone"></i>
+                    </button>
+                    <p id="voiceStatus" class="text-lg font-semibold mb-1">Click to start listening</p>
+                    <p id="voiceTranscript" class="text-gray-400 text-sm text-center max-w-sm min-h-[2rem]"></p>
+                </div>
+
+                <!-- Voice Feedback -->
+                <div id="voiceFeedback" class="mb-6 p-4 rounded-xl bg-white/10 hidden">
+                    <p class="font-semibold mb-1">Last Command:</p>
+                    <p id="voiceLastCommand" class="text-purple-300"></p>
+                    <p id="voiceResponse" class="text-sm text-gray-300 mt-1"></p>
+                </div>
+
+                <!-- Available Commands -->
+                <div class="mb-6">
+                    <h3 class="font-semibold mb-3">Available Commands</h3>
+                    <div class="grid grid-cols-1 sm:grid-cols-2 gap-2 text-sm">
+                        <div class="p-2 rounded-lg bg-white/10"><i class="fas fa-chevron-right text-purple-400 mr-2"></i>"show auctions"</div>
+                        <div class="p-2 rounded-lg bg-white/10"><i class="fas fa-chevron-right text-purple-400 mr-2"></i>"create auction"</div>
+                        <div class="p-2 rounded-lg bg-white/10"><i class="fas fa-chevron-right text-purple-400 mr-2"></i>"my bids"</div>
+                        <div class="p-2 rounded-lg bg-white/10"><i class="fas fa-chevron-right text-purple-400 mr-2"></i>"open filter"</div>
+                        <div class="p-2 rounded-lg bg-white/10"><i class="fas fa-chevron-right text-purple-400 mr-2"></i>"open map"</div>
+                        <div class="p-2 rounded-lg bg-white/10"><i class="fas fa-chevron-right text-purple-400 mr-2"></i>"open video"</div>
+                        <div class="p-2 rounded-lg bg-white/10"><i class="fas fa-chevron-right text-purple-400 mr-2"></i>"scroll down / up"</div>
+                        <div class="p-2 rounded-lg bg-white/10"><i class="fas fa-chevron-right text-purple-400 mr-2"></i>"search [term]"</div>
+                        <div class="p-2 rounded-lg bg-white/10"><i class="fas fa-chevron-right text-purple-400 mr-2"></i>"stop listening"</div>
+                        <div class="p-2 rounded-lg bg-white/10"><i class="fas fa-chevron-right text-purple-400 mr-2"></i>"help"</div>
+                    </div>
+                </div>
+
+                <!-- Privacy Notice -->
+                <div class="p-4 rounded-xl bg-yellow-500/10 border border-yellow-500/30 text-sm">
+                    <i class="fas fa-shield-alt text-yellow-400 mr-2"></i>
+                    <strong>Privacy:</strong> Voice recognition runs entirely in your browser. No audio is sent to our servers.
+                    <span id="voiceSupportNote" class="block mt-1 text-gray-400"></span>
+                </div>
+
+                <!-- Command History -->
+                <div class="mt-6">
+                    <div class="flex items-center justify-between mb-2">
+                        <h3 class="font-semibold">Command History</h3>
+                        <button onclick="clearVoiceHistory()" class="text-xs text-red-400 hover:text-red-300">Clear</button>
+                    </div>
+                    <div id="voiceHistory" class="space-y-1 max-h-40 overflow-y-auto text-sm text-gray-400">
+                        <p class="text-gray-500">No commands yet.</p>
+                    </div>
                 </div>
             </div>
         </div>
