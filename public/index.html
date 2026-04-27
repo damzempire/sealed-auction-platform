@@ -137,6 +137,140 @@
             margin-top: 16px;
         }
         
+        /* Social Sharing Styles */
+        .social-sharing-container {
+            margin-top: 1rem;
+            padding: 1rem;
+            background: var(--bg-secondary);
+            border-radius: 8px;
+            border: 1px solid var(--border-color);
+        }
+        
+        .share-btn {
+            padding: 0.5rem 1rem;
+            border: none;
+            border-radius: 6px;
+            font-size: 0.875rem;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
+            text-decoration: none;
+            color: white;
+        }
+        
+        .share-btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
+        }
+        
+        .share-btn:active {
+            transform: translateY(0);
+        }
+        
+        .twitter-btn {
+            background: #1DA1F2;
+        }
+        
+        .twitter-btn:hover {
+            background: #1a91da;
+        }
+        
+        .facebook-btn {
+            background: #4267B2;
+        }
+        
+        .facebook-btn:hover {
+            background: #365899;
+        }
+        
+        .linkedin-btn {
+            background: #0077B5;
+        }
+        
+        .linkedin-btn:hover {
+            background: #005885;
+        }
+        
+        .whatsapp-btn {
+            background: #25D366;
+        }
+        
+        .whatsapp-btn:hover {
+            background: #20b954;
+        }
+        
+        .telegram-btn {
+            background: #0088cc;
+        }
+        
+        .telegram-btn:hover {
+            background: #0077b8;
+        }
+        
+        .email-btn {
+            background: #EA4335;
+        }
+        
+        .email-btn:hover {
+            background: #d23321;
+        }
+        
+        .copy-btn {
+            background: #6B7280;
+        }
+        
+        .copy-btn:hover {
+            background: #4B5563;
+        }
+        
+        .custom-btn {
+            background: #8B5CF6;
+        }
+        
+        .custom-btn:hover {
+            background: #7C3AED;
+        }
+        
+        .native-btn {
+            background: #10B981;
+        }
+        
+        .native-btn:hover {
+            background: #059669;
+        }
+        
+        .share-preview {
+            margin-top: 0.75rem;
+            padding: 0.75rem;
+            background: var(--bg-primary);
+            border-radius: 6px;
+            border: 1px solid var(--border-color);
+        }
+        
+        .share-image {
+            border-radius: 4px;
+        }
+        
+        .share-message {
+            font-style: italic;
+            color: var(--text-secondary);
+        }
+        
+        /* Mobile responsive sharing */
+        @media (max-width: 768px) {
+            .share-btn {
+                padding: 0.4rem 0.8rem;
+                font-size: 0.75rem;
+            }
+            
+            .social-sharing-container .flex {
+                gap: 0.5rem;
+            }
+        }
+        
         /* Loading overlay styles */
         .loading-overlay {
             position: fixed;
@@ -594,6 +728,9 @@
                 <button data-tab="voice" onclick="switchTab('voice')" class="bg-transparent text-gray-600 px-4 py-2 rounded-lg transition-colors text-sm font-medium hover:bg-white/20">
                     <i class="fas fa-microphone mr-2"></i>Voice
                 </button>
+                <button data-tab="admin" onclick="switchTab('admin')" class="bg-transparent text-gray-600 px-4 py-2 rounded-lg transition-colors text-sm font-medium hover:bg-white/20" id="adminTab" style="display: none;">
+                    <i class="fas fa-shield-alt mr-2"></i>Admin
+                </button>
             </div>
         </div>
 
@@ -894,6 +1031,129 @@
             </div>
         </div>
 
+        <!-- Admin Dashboard Tab -->
+        <div id="adminContent" class="tab-content hidden">
+            <div class="glass-effect rounded-xl p-4 sm:p-6">
+                <h2 class="text-xl sm:text-2xl font-bold mb-6"><i class="fas fa-shield-alt mr-2"></i>Admin Dashboard</h2>
+                
+                <!-- Dashboard Stats -->
+                <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-8" id="adminStats">
+                    <div class="bg-blue-500/10 border border-blue-500/30 rounded-lg p-4">
+                        <div class="flex items-center justify-between">
+                            <div>
+                                <p class="text-sm text-blue-400">Total Users</p>
+                                <p class="text-2xl font-bold" id="totalUsers">-</p>
+                            </div>
+                            <i class="fas fa-users text-blue-400 text-2xl"></i>
+                        </div>
+                    </div>
+                    <div class="bg-green-500/10 border border-green-500/30 rounded-lg p-4">
+                        <div class="flex items-center justify-between">
+                            <div>
+                                <p class="text-sm text-green-400">Active Auctions</p>
+                                <p class="text-2xl font-bold" id="activeAuctions">-</p>
+                            </div>
+                            <i class="fas fa-gavel text-green-400 text-2xl"></i>
+                        </div>
+                    </div>
+                    <div class="bg-yellow-500/10 border border-yellow-500/30 rounded-lg p-4">
+                        <div class="flex items-center justify-between">
+                            <div>
+                                <p class="text-sm text-yellow-400">Revenue (30d)</p>
+                                <p class="text-2xl font-bold" id="revenue30d">-</p>
+                            </div>
+                            <i class="fas fa-dollar-sign text-yellow-400 text-2xl"></i>
+                        </div>
+                    </div>
+                    <div class="bg-red-500/10 border border-red-500/30 rounded-lg p-4">
+                        <div class="flex items-center justify-between">
+                            <div>
+                                <p class="text-sm text-red-400">Security Alerts</p>
+                                <p class="text-2xl font-bold" id="securityAlerts">-</p>
+                            </div>
+                            <i class="fas fa-exclamation-triangle text-red-400 text-2xl"></i>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Admin Navigation -->
+                <div class="flex flex-wrap gap-2 mb-6">
+                    <button onclick="showAdminSection('users')" class="admin-nav-btn bg-purple-600 text-white px-4 py-2 rounded-lg text-sm font-medium">
+                        <i class="fas fa-users mr-2"></i>Users
+                    </button>
+                    <button onclick="showAdminSection('auctions')" class="admin-nav-btn bg-transparent text-gray-600 px-4 py-2 rounded-lg text-sm font-medium hover:bg-white/20">
+                        <i class="fas fa-gavel mr-2"></i>Auctions
+                    </button>
+                    <button onclick="showAdminSection('revenue')" class="admin-nav-btn bg-transparent text-gray-600 px-4 py-2 rounded-lg text-sm font-medium hover:bg-white/20">
+                        <i class="fas fa-dollar-sign mr-2"></i>Revenue
+                    </button>
+                    <button onclick="showAdminSection('security')" class="admin-nav-btn bg-transparent text-gray-600 px-4 py-2 rounded-lg text-sm font-medium hover:bg-white/20">
+                        <i class="fas fa-shield-alt mr-2"></i>Security
+                    </button>
+                    <button onclick="showAdminSection('config')" class="admin-nav-btn bg-transparent text-gray-600 px-4 py-2 rounded-lg text-sm font-medium hover:bg-white/20">
+                        <i class="fas fa-cog mr-2"></i>Config
+                    </button>
+                    <button onclick="showAdminSection('audit')" class="admin-nav-btn bg-transparent text-gray-600 px-4 py-2 rounded-lg text-sm font-medium hover:bg-white/20">
+                        <i class="fas fa-history mr-2"></i>Audit
+                    </button>
+                </div>
+
+                <!-- Admin Sections -->
+                <div id="adminSections">
+                    <!-- Users Section -->
+                    <div id="usersSection" class="admin-section">
+                        <div class="flex items-center justify-between mb-4">
+                            <h3 class="text-lg font-semibold">User Management</h3>
+                            <div class="flex gap-2">
+                                <input type="text" id="userSearch" placeholder="Search users..." class="px-3 py-1 rounded-lg bg-white/10 border border-white/20 text-sm">
+                                <select id="userRoleFilter" class="px-3 py-1 rounded-lg bg-white/10 border border-white/20 text-sm">
+                                    <option value="">All Roles</option>
+                                    <option value="user">User</option>
+                                    <option value="admin">Admin</option>
+                                    <option value="moderator">Moderator</option>
+                                </select>
+                                <select id="userStatusFilter" class="px-3 py-1 rounded-lg bg-white/10 border border-white/20 text-sm">
+                                    <option value="">All Status</option>
+                                    <option value="active">Active</option>
+                                    <option value="inactive">Inactive</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div class="overflow-x-auto">
+                            <table class="w-full text-sm">
+                                <thead>
+                                    <tr class="border-b border-white/10">
+                                        <th class="text-left py-2">Username</th>
+                                        <th class="text-left py-2">Email</th>
+                                        <th class="text-left py-2">Role</th>
+                                        <th class="text-left py-2">Status</th>
+                                        <th class="text-left py-2">Created</th>
+                                        <th class="text-left py-2">Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="usersTableBody">
+                                    <tr>
+                                        <td colspan="6" class="text-center py-4 text-gray-400">Loading users...</td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                        <div class="flex justify-between items-center mt-4">
+                            <div class="text-sm text-gray-400" id="usersPaginationInfo"></div>
+                            <div class="flex gap-2" id="usersPagination"></div>
+                        </div>
+                    </div>
+
+                    <!-- Other sections will be loaded dynamically -->
+                    <div id="auctionsSection" class="admin-section hidden"></div>
+                    <div id="revenueSection" class="admin-section hidden"></div>
+                    <div id="securitySection" class="admin-section hidden"></div>
+                    <div id="configSection" class="admin-section hidden"></div>
+                    <div id="auditSection" class="admin-section hidden"></div>
+                </div>
+            </div>
+        </div>
+
         <!-- Bid Modal -->
         <div id="bidModal" class="fixed inset-0 bg-black bg-opacity-50 hidden z-50 flex items-center justify-center p-4">
             <div class="glass-effect rounded-xl p-6 sm:p-8 max-w-md w-full max-h-[90vh] overflow-y-auto">
@@ -907,6 +1167,81 @@
                 </form>
             </div>
         </div>
+
+        <!-- Social Sharing Modal -->
+        <div id="shareModal" class="fixed inset-0 bg-black bg-opacity-50 hidden z-50 flex items-center justify-center p-4">
+            <div class="glass-effect rounded-xl p-6 sm:p-8 max-w-md w-full max-h-[90vh] overflow-y-auto">
+                <h2 class="text-xl sm:text-2xl font-bold mb-6">Share Auction</h2>
+                
+                <div class="mb-6">
+                    <h3 class="text-lg font-semibold mb-2" id="shareAuctionTitle">Auction Title</h3>
+                    <p class="text-sm text-gray-400 mb-4">Share this auction with others on social media</p>
+                </div>
+
+                <!-- Custom Message -->
+                <div class="mb-6">
+                    <label class="block text-sm font-medium mb-2">Custom Message (optional)</label>
+                    <textarea id="customShareMessage" rows="3" class="w-full px-3 py-2 rounded-lg bg-white/10 border border-white/20 text-sm" placeholder="Add your own message..."></textarea>
+                </div>
+
+                <!-- Share Options -->
+                <div class="mb-6">
+                    <label class="flex items-center mb-4">
+                        <input type="checkbox" id="generateShareImage" class="mr-2">
+                        <span class="text-sm">Generate share image</span>
+                    </label>
+                </div>
+
+                <!-- Social Media Buttons -->
+                <div class="grid grid-cols-2 gap-3 mb-6">
+                    <button onclick="shareOnSocial('twitter')" class="twitter-btn text-white px-4 py-3 rounded-lg flex items-center justify-center transition-colors">
+                        <i class="fab fa-twitter mr-2"></i>Twitter
+                    </button>
+                    <button onclick="shareOnSocial('facebook')" class="facebook-btn text-white px-4 py-3 rounded-lg flex items-center justify-center transition-colors">
+                        <i class="fab fa-facebook mr-2"></i>Facebook
+                    </button>
+                    <button onclick="shareOnSocial('linkedin')" class="linkedin-btn text-white px-4 py-3 rounded-lg flex items-center justify-center transition-colors">
+                        <i class="fab fa-linkedin mr-2"></i>LinkedIn
+                    </button>
+                    <button onclick="shareOnSocial('whatsapp')" class="whatsapp-btn text-white px-4 py-3 rounded-lg flex items-center justify-center transition-colors">
+                        <i class="fab fa-whatsapp mr-2"></i>WhatsApp
+                    </button>
+                    <button onclick="shareOnSocial('telegram')" class="telegram-btn text-white px-4 py-3 rounded-lg flex items-center justify-center transition-colors">
+                        <i class="fab fa-telegram mr-2"></i>Telegram
+                    </button>
+                    <button onclick="shareOnSocial('email')" class="email-btn text-white px-4 py-3 rounded-lg flex items-center justify-center transition-colors">
+                        <i class="fas fa-envelope mr-2"></i>Email
+                    </button>
+                </div>
+
+                <!-- Copy Link -->
+                <div class="mb-6">
+                    <button onclick="shareOnSocial('copy_link')" class="copy-btn text-white w-full px-4 py-3 rounded-lg flex items-center justify-center transition-colors">
+                        <i class="fas fa-link mr-2"></i>Copy Link
+                    </button>
+                </div>
+
+                <!-- Mobile Native Sharing -->
+                <div class="mb-6" id="nativeShareContainer" style="display: none;">
+                    <button onclick="shareNatively()" class="native-btn text-white w-full px-4 py-3 rounded-lg flex items-center justify-center transition-colors">
+                        <i class="fas fa-share mr-2"></i>Share (Native)
+                    </button>
+                </div>
+
+                <!-- Share Preview -->
+                <div id="sharePreview" class="share-preview hidden">
+                    <h4 class="text-sm font-semibold mb-2">Preview:</h4>
+                    <div id="sharePreviewContent" class="text-xs text-gray-400"></div>
+                </div>
+
+                <!-- Actions -->
+                <div class="flex space-x-3">
+                    <button onclick="closeShareModal()" class="flex-1 bg-gray-500 hover:bg-gray-600 text-white px-4 py-2 rounded-lg transition-colors">
+                        Cancel
+                    </button>
+                </div>
+            </div>
+        </div>
     </main>
 
     <script src="app.js"></script>
@@ -914,5 +1249,6 @@
     <script src="ai-recommendations.js"></script>
     <script src="blockchain-ui.js"></script>
     <script src="smart-contract-ui.js"></script>
+    <script src="social-sharing.js"></script>
 </body>
 </html>

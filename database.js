@@ -23,9 +23,12 @@ class AuctionDatabase {
         username TEXT UNIQUE NOT NULL,
         email TEXT UNIQUE,
         hashed_password TEXT NOT NULL,
+        role TEXT DEFAULT 'user' CHECK(role IN ('user', 'admin', 'moderator')),
         failed_login_attempts INTEGER DEFAULT 0,
         last_failed_login DATETIME,
         locked_until DATETIME,
+        is_active INTEGER DEFAULT 1,
+        email_verified INTEGER DEFAULT 0,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
         updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
       )
@@ -80,6 +83,115 @@ class AuctionDatabase {
       )
     `);
 
+    // Create admin-related tables
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS system_logs (
+        id TEXT PRIMARY KEY,
+        level TEXT NOT NULL CHECK(level IN ('info', 'warning', 'error', 'critical')),
+        message TEXT NOT NULL,
+        user_id TEXT,
+        ip_address TEXT,
+        user_agent TEXT,
+        endpoint TEXT,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (user_id) REFERENCES users(id)
+      )
+    `);
+
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS revenue_tracking (
+        id TEXT PRIMARY KEY,
+        auction_id TEXT NOT NULL,
+        transaction_type TEXT NOT NULL CHECK(transaction_type IN ('auction_fee', 'commission', 'refund')),
+        amount REAL NOT NULL,
+        currency TEXT DEFAULT 'USD',
+        status TEXT DEFAULT 'pending' CHECK(status IN ('pending', 'completed', 'failed')),
+        transaction_hash TEXT,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (auction_id) REFERENCES auctions(id)
+      )
+    `);
+
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS system_config (
+        id TEXT PRIMARY KEY,
+        key TEXT UNIQUE NOT NULL,
+        value TEXT NOT NULL,
+        description TEXT,
+        category TEXT DEFAULT 'general',
+        is_public INTEGER DEFAULT 0,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS audit_logs (
+        id TEXT PRIMARY KEY,
+        admin_id TEXT NOT NULL,
+        action TEXT NOT NULL,
+        target_type TEXT NOT NULL CHECK(target_type IN ('user', 'auction', 'config', 'system')),
+        target_id TEXT,
+        old_values TEXT,
+        new_values TEXT,
+        ip_address TEXT,
+        user_agent TEXT,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (admin_id) REFERENCES users(id)
+      )
+    `);
+
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS security_alerts (
+        id TEXT PRIMARY KEY,
+        alert_type TEXT NOT NULL CHECK(alert_type IN ('suspicious_login', 'failed_attempts', 'unusual_activity', 'security_breach')),
+        severity TEXT NOT NULL CHECK(severity IN ('low', 'medium', 'high', 'critical')),
+        message TEXT NOT NULL,
+        user_id TEXT,
+        ip_address TEXT,
+        details TEXT,
+        status TEXT DEFAULT 'open' CHECK(status IN ('open', 'investigating', 'resolved', 'false_positive')),
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        resolved_at DATETIME,
+        resolved_by TEXT,
+        FOREIGN KEY (user_id) REFERENCES users(id),
+        FOREIGN KEY (resolved_by) REFERENCES users(id)
+      )
+    `);
+
+    // Create social sharing analytics table
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS social_shares (
+        id TEXT PRIMARY KEY,
+        auction_id TEXT NOT NULL,
+        platform TEXT NOT NULL CHECK(platform IN ('twitter', 'facebook', 'linkedin', 'whatsapp', 'telegram', 'email', 'copy_link')),
+        share_url TEXT NOT NULL,
+        custom_message TEXT,
+        image_generated INTEGER DEFAULT 0,
+        user_id TEXT,
+        ip_address TEXT,
+        user_agent TEXT,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (auction_id) REFERENCES auctions(id),
+        FOREIGN KEY (user_id) REFERENCES users(id)
+      )
+    `);
+
+    // Create share engagement tracking table
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS share_engagement (
+        id TEXT PRIMARY KEY,
+        share_id TEXT NOT NULL,
+        engagement_type TEXT NOT NULL CHECK(engagement_type IN ('click', 'view', 'conversion')),
+        referrer_url TEXT,
+        ip_address TEXT,
+        user_agent TEXT,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (share_id) REFERENCES social_shares(id)
+      )
+    `);
+
     // Create indexes for better performance
     this.db.exec(`
       CREATE INDEX IF NOT EXISTS idx_auctions_status ON auctions(status);
@@ -88,8 +200,22 @@ class AuctionDatabase {
       CREATE INDEX IF NOT EXISTS idx_bids_bidder_id ON bids(bidder_id);
       CREATE INDEX IF NOT EXISTS idx_users_username ON users(username);
       CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
+      CREATE INDEX IF NOT EXISTS idx_users_role ON users(role);
       CREATE INDEX IF NOT EXISTS idx_password_reset_tokens_token ON password_reset_tokens(token);
       CREATE INDEX IF NOT EXISTS idx_password_reset_tokens_user_id ON password_reset_tokens(user_id);
+      CREATE INDEX IF NOT EXISTS idx_system_logs_level ON system_logs(level);
+      CREATE INDEX IF NOT EXISTS idx_system_logs_created_at ON system_logs(created_at);
+      CREATE INDEX IF NOT EXISTS idx_revenue_tracking_status ON revenue_tracking(status);
+      CREATE INDEX IF NOT EXISTS idx_revenue_tracking_created_at ON revenue_tracking(created_at);
+      CREATE INDEX IF NOT EXISTS idx_audit_logs_admin_id ON audit_logs(admin_id);
+      CREATE INDEX IF NOT EXISTS idx_audit_logs_created_at ON audit_logs(created_at);
+      CREATE INDEX IF NOT EXISTS idx_security_alerts_status ON security_alerts(status);
+      CREATE INDEX IF NOT EXISTS idx_security_alerts_severity ON security_alerts(severity);
+      CREATE INDEX IF NOT EXISTS idx_social_shares_auction_id ON social_shares(auction_id);
+      CREATE INDEX IF NOT EXISTS idx_social_shares_platform ON social_shares(platform);
+      CREATE INDEX IF NOT EXISTS idx_social_shares_created_at ON social_shares(created_at);
+      CREATE INDEX IF NOT EXISTS idx_share_engagement_share_id ON share_engagement(share_id);
+      CREATE INDEX IF NOT EXISTS idx_share_engagement_type ON share_engagement(engagement_type);
     `);
   }
 
@@ -552,6 +678,922 @@ class AuctionDatabase {
     return stmt.run();
   }
 
+  // Admin methods
+  updateUserRole(userId, role) {
+    const validation = this.securityLayer.validateInputs({ userId, role });
+    if (!validation.valid) {
+      throw new Error(validation.errors.join(', '));
+    }
+    
+    const stmt = this.securityLayer.prepare(`
+      UPDATE users SET role = ?, updated_at = datetime('now') WHERE id = ?
+    `);
+    return stmt.run(validation.sanitized.role, validation.sanitized.userId);
+  }
+
+  updateUserStatus(userId, isActive) {
+    const validation = this.securityLayer.validateInputs({ userId, isActive });
+    if (!validation.valid) {
+      throw new Error(validation.errors.join(', '));
+    }
+    
+    const stmt = this.securityLayer.prepare(`
+      UPDATE users SET is_active = ?, updated_at = datetime('now') WHERE id = ?
+    `);
+    return stmt.run(validation.sanitized.isActive ? 1 : 0, validation.sanitized.userId);
+  }
+
+  getAllUsers(limit = 50, offset = 0) {
+    const stmt = this.securityLayer.prepare(`
+      SELECT id, username, email, role, failed_login_attempts, locked_until, 
+             is_active, email_verified, created_at, updated_at
+      FROM users 
+      ORDER BY created_at DESC
+      LIMIT ? OFFSET ?
+    `);
+    return stmt.all(limit, offset);
+  }
+
+  getUserStats() {
+    const stmt = this.securityLayer.prepare(`
+      SELECT 
+        COUNT(*) as total_users,
+        COUNT(CASE WHEN role = 'admin' THEN 1 END) as admin_count,
+        COUNT(CASE WHEN role = 'moderator' THEN 1 END) as moderator_count,
+        COUNT(CASE WHEN is_active = 1 THEN 1 END) as active_users,
+        COUNT(CASE WHEN email_verified = 1 THEN 1 END) as verified_users,
+        COUNT(CASE WHEN locked_until > datetime('now') THEN 1 END) as locked_users
+      FROM users
+    `);
+    return stmt.get();
+  }
+
+  getAuctionStats() {
+    const stmt = this.securityLayer.prepare(`
+      SELECT 
+        COUNT(*) as total_auctions,
+        COUNT(CASE WHEN status = 'active' THEN 1 END) as active_auctions,
+        COUNT(CASE WHEN status = 'closed' THEN 1 END) as closed_auctions,
+        COUNT(CASE WHEN status = 'cancelled' THEN 1 END) as cancelled_auctions,
+        COALESCE(SUM(CASE WHEN status = 'closed' THEN current_highest_bid ELSE 0 END), 0) as total_revenue
+      FROM auctions
+    `);
+    return stmt.get();
+  }
+
+  getRevenueStats(days = 30) {
+    const stmt = this.securityLayer.prepare(`
+      SELECT 
+        transaction_type,
+        SUM(amount) as total_amount,
+        COUNT(*) as transaction_count,
+        AVG(amount) as average_amount
+      FROM revenue_tracking 
+      WHERE created_at >= datetime('now', '-${days} days')
+        AND status = 'completed'
+      GROUP BY transaction_type
+    `);
+    return stmt.all();
+  }
+
+  createAuditLog(adminId, action, targetType, targetId, oldValues = null, newValues = null, ipAddress = null, userAgent = null) {
+    const validation = this.securityLayer.validateInputs({ adminId, action, targetType, targetId });
+    if (!validation.valid) {
+      throw new Error(validation.errors.join(', '));
+    }
+    
+    const stmt = this.securityLayer.prepare(`
+      INSERT INTO audit_logs (admin_id, action, target_type, target_id, old_values, new_values, ip_address, user_agent)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    return stmt.run(
+      validation.sanitized.adminId,
+      validation.sanitized.action,
+      validation.sanitized.targetType,
+      validation.sanitized.targetId,
+      oldValues ? JSON.stringify(oldValues) : null,
+      newValues ? JSON.stringify(newValues) : null,
+      ipAddress,
+      userAgent
+    );
+  }
+
+  getAuditLogs(limit = 100, offset = 0) {
+    const stmt = this.securityLayer.prepare(`
+      SELECT al.*, u.username as admin_username
+      FROM audit_logs al
+      JOIN users u ON al.admin_id = u.id
+      ORDER BY al.created_at DESC
+      LIMIT ? OFFSET ?
+    `);
+    return stmt.all(limit, offset);
+  }
+
+  createSecurityAlert(alertType, severity, message, userId = null, ipAddress = null, details = null) {
+    const validation = this.securityLayer.validateInputs({ alertType, severity, message, userId });
+    if (!validation.valid) {
+      throw new Error(validation.errors.join(', '));
+    }
+    
+    const stmt = this.securityLayer.prepare(`
+      INSERT INTO security_alerts (alert_type, severity, message, user_id, ip_address, details)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `);
+    return stmt.run(
+      validation.sanitized.alertType,
+      validation.sanitized.severity,
+      validation.sanitized.message,
+      validation.sanitized.userId,
+      ipAddress,
+      details ? JSON.stringify(details) : null
+    );
+  }
+
+  getSecurityAlerts(status = null, limit = 50) {
+    let query = `
+      SELECT sa.*, u.username as user_username
+      FROM security_alerts sa
+      LEFT JOIN users u ON sa.user_id = u.id
+    `;
+    let params = [];
+    
+    if (status) {
+      query += ' WHERE sa.status = ?';
+      params.push(status);
+    }
+    
+    query += ' ORDER BY sa.created_at DESC LIMIT ?';
+    params.push(limit);
+    
+    const stmt = this.securityLayer.prepare(query);
+    return stmt.all(...params);
+  }
+
+  updateSecurityAlertStatus(alertId, status, resolvedBy = null) {
+    const validation = this.securityLayer.validateInputs({ alertId, status, resolvedBy });
+    if (!validation.valid) {
+      throw new Error(validation.errors.join(', '));
+    }
+    
+    const stmt = this.securityLayer.prepare(`
+      UPDATE security_alerts 
+      SET status = ?, resolved_at = datetime('now'), resolved_by = ?
+      WHERE id = ?
+    `);
+    return stmt.run(validation.sanitized.status, validation.sanitized.resolvedBy, validation.sanitized.alertId);
+  }
+
+  createSystemConfig(key, value, description = null, category = 'general', isPublic = 0) {
+    const validation = this.securityLayer.validateInputs({ key, value, description, category });
+    if (!validation.valid) {
+      throw new Error(validation.errors.join(', '));
+    }
+    
+    const stmt = this.securityLayer.prepare(`
+      INSERT INTO system_config (key, value, description, category, is_public)
+      VALUES (?, ?, ?, ?, ?)
+    `);
+    return stmt.run(
+      validation.sanitized.key,
+      validation.sanitized.value,
+      validation.sanitized.description,
+      validation.sanitized.category,
+      isPublic ? 1 : 0
+    );
+  }
+
+  updateSystemConfig(key, value) {
+    const validation = this.securityLayer.validateInputs({ key, value });
+    if (!validation.valid) {
+      throw new Error(validation.errors.join(', '));
+    }
+    
+    const stmt = this.securityLayer.prepare(`
+      UPDATE system_config 
+      SET value = ?, updated_at = datetime('now') 
+      WHERE key = ?
+    `);
+    return stmt.run(validation.sanitized.value, validation.sanitized.key);
+  }
+
+  getSystemConfig(category = null, isPublic = null) {
+    let query = 'SELECT * FROM system_config';
+    let params = [];
+    let conditions = [];
+    
+    if (category) {
+      conditions.push('category = ?');
+      params.push(category);
+    }
+    
+    if (isPublic !== null) {
+      conditions.push('is_public = ?');
+      params.push(isPublic ? 1 : 0);
+    }
+    
+    if (conditions.length > 0) {
+      query += ' WHERE ' + conditions.join(' AND ');
+    }
+    
+    query += ' ORDER BY category, key';
+    
+    const stmt = this.securityLayer.prepare(query);
+    return stmt.all(...params);
+  }
+
+  createSystemLog(level, message, userId = null, ipAddress = null, userAgent = null, endpoint = null) {
+    const validation = this.securityLayer.validateInputs({ level, message, userId });
+    if (!validation.valid) {
+      throw new Error(validation.errors.join(', '));
+    }
+    
+    const stmt = this.securityLayer.prepare(`
+      INSERT INTO system_logs (level, message, user_id, ip_address, user_agent, endpoint)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `);
+    return stmt.run(
+      validation.sanitized.level,
+      validation.sanitized.message,
+      validation.sanitized.userId,
+      ipAddress,
+      userAgent,
+      endpoint
+    );
+  }
+
+  getSystemLogs(level = null, limit = 100) {
+    let query = `
+      SELECT sl.*, u.username as user_username
+      FROM system_logs sl
+      LEFT JOIN users u ON sl.user_id = u.id
+    `;
+    let params = [];
+    
+    if (level) {
+      query += ' WHERE sl.level = ?';
+      params.push(level);
+    }
+    
+    query += ' ORDER BY sl.created_at DESC LIMIT ?';
+    params.push(limit);
+    
+    const stmt = this.securityLayer.prepare(query);
+    return stmt.all(...params);
+  }
+
+  trackRevenue(auctionId, transactionType, amount, currency = 'USD', transactionHash = null) {
+    const validation = this.securityLayer.validateInputs({ auctionId, transactionType, amount });
+    if (!validation.valid) {
+      throw new Error(validation.errors.join(', '));
+    }
+    
+    const stmt = this.securityLayer.prepare(`
+      INSERT INTO revenue_tracking (auction_id, transaction_type, amount, currency, transaction_hash)
+      VALUES (?, ?, ?, ?, ?)
+    `);
+    return stmt.run(
+      validation.sanitized.auctionId,
+      validation.sanitized.transactionType,
+      validation.sanitized.amount,
+      currency,
+      transactionHash
+    );
+  }
+
+  getRevenueSummary(days = 30) {
+    const stmt = this.securityLayer.prepare(`
+      SELECT 
+        DATE(created_at) as date,
+        SUM(amount) as daily_revenue,
+        COUNT(*) as transaction_count
+      FROM revenue_tracking 
+      WHERE created_at >= datetime('now', '-${days} days')
+        AND status = 'completed'
+      GROUP BY DATE(created_at)
+      ORDER BY date DESC
+    `);
+    return stmt.all();
+  }
+
+  // Additional admin methods
+  getAuctionsByStatus(status, limit = 50, offset = 0) {
+    const validation = this.securityLayer.validateInputs({ status, limit, offset });
+    if (!validation.valid) {
+      throw new Error(validation.errors.join(', '));
+    }
+
+    const stmt = this.securityLayer.prepare(`
+      SELECT a.*, u.username as creator_username
+      FROM auctions a
+      JOIN users u ON a.creator_id = u.id
+      WHERE a.status = ?
+      ORDER BY a.created_at DESC
+      LIMIT ? OFFSET ?
+    `);
+    return stmt.all(validation.sanitized.status, validation.sanitized.limit, validation.sanitized.offset);
+  }
+
+  getAllAuctions(limit = 50, offset = 0) {
+    const validation = this.securityLayer.validateInputs({ limit, offset });
+    if (!validation.valid) {
+      throw new Error(validation.errors.join(', '));
+    }
+
+    const stmt = this.securityLayer.prepare(`
+      SELECT a.*, u.username as creator_username
+      FROM auctions a
+      JOIN users u ON a.creator_id = u.id
+      ORDER BY a.created_at DESC
+      LIMIT ? OFFSET ?
+    `);
+    return stmt.all(validation.sanitized.limit, validation.sanitized.offset);
+  }
+
+  updateAuctionStatus(auctionId, status) {
+    const validation = this.securityLayer.validateInputs({ auctionId, status });
+    if (!validation.valid) {
+      throw new Error(validation.errors.join(', '));
+    }
+
+    const stmt = this.securityLayer.prepare(`
+      UPDATE auctions 
+      SET status = ?, updated_at = datetime('now') 
+      WHERE id = ?
+    `);
+    return stmt.run(validation.sanitized.status, validation.sanitized.auctionId);
+  }
+
+  getAuctionById(auctionId) {
+    const validation = this.securityLayer.validateInput(auctionId);
+    if (!validation.valid) {
+      console.warn('[SECURITY] Invalid auction ID format:', auctionId);
+      return null;
+    }
+
+    const stmt = this.securityLayer.prepare(`
+      SELECT a.*, u.username as creator_username
+      FROM auctions a
+      JOIN users u ON a.creator_id = u.id
+      WHERE a.id = ?
+    `);
+    return stmt.get(validation.sanitized);
+  }
+
+  getRevenueTransactions(limit = 50, offset = 0, status = null) {
+    let query = `
+      SELECT rt.*, a.title as auction_title
+      FROM revenue_tracking rt
+      JOIN auctions a ON rt.auction_id = a.id
+    `;
+    let params = [];
+    let conditions = [];
+
+    if (status) {
+      conditions.push('rt.status = ?');
+      params.push(status);
+    }
+
+    if (conditions.length > 0) {
+      query += ' WHERE ' + conditions.join(' AND ');
+    }
+
+    query += ' ORDER BY rt.created_at DESC LIMIT ? OFFSET ?';
+    params.push(limit, offset);
+
+    const stmt = this.securityLayer.prepare(query);
+    return stmt.all(...params);
+  }
+
+  getActiveAuctions() {
+    const stmt = this.securityLayer.prepare(`
+      SELECT * FROM auctions 
+      WHERE status = 'active' AND end_time > datetime('now')
+      ORDER BY end_time ASC
+    `);
+    return stmt.all();
+  }
+
+  closeAuction(auctionId, winnerId, winningBidId) {
+    const validation = this.securityLayer.validateInputs({ auctionId, winnerId, winningBidId });
+    if (!validation.valid) {
+      throw new Error(validation.errors.join(', '));
+    }
+
+    const stmt = this.securityLayer.prepare(`
+      UPDATE auctions 
+      SET status = 'closed', winner_id = ?, winning_bid_id = ?, updated_at = datetime('now')
+      WHERE id = ?
+    `);
+    return stmt.run(
+      validation.sanitized.winnerId,
+      validation.sanitized.winningBidId,
+      validation.sanitized.auctionId
+    );
+  }
+
+  // Social sharing methods
+  createSocialShare(auctionId, platform, shareUrl, customMessage = null, imageGenerated = false, userId = null, ipAddress = null, userAgent = null) {
+    const validation = this.securityLayer.validateInputs({ auctionId, platform, shareUrl, customMessage });
+    if (!validation.valid) {
+      throw new Error(validation.errors.join(', '));
+    }
+
+    const stmt = this.securityLayer.prepare(`
+      INSERT INTO social_shares (auction_id, platform, share_url, custom_message, image_generated, user_id, ip_address, user_agent)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    return stmt.run(
+      validation.sanitized.auctionId,
+      validation.sanitized.platform,
+      validation.sanitized.shareUrl,
+      validation.sanitized.customMessage,
+      imageGenerated ? 1 : 0,
+      userId,
+      ipAddress,
+      userAgent
+    );
+  }
+
+  trackShareEngagement(shareId, engagementType, referrerUrl = null, ipAddress = null, userAgent = null) {
+    const validation = this.securityLayer.validateInputs({ shareId, engagementType, referrerUrl });
+    if (!validation.valid) {
+      throw new Error(validation.errors.join(', '));
+    }
+
+    const stmt = this.securityLayer.prepare(`
+      INSERT INTO share_engagement (share_id, engagement_type, referrer_url, ip_address, user_agent)
+      VALUES (?, ?, ?, ?, ?)
+    `);
+    return stmt.run(
+      validation.sanitized.shareId,
+      validation.sanitized.engagementType,
+      validation.sanitized.referrerUrl,
+      ipAddress,
+      userAgent
+    );
+  }
+
+  getShareStats(auctionId = null, days = 30) {
+    let query = `
+      SELECT 
+        platform,
+        COUNT(*) as total_shares,
+        COUNT(CASE WHEN image_generated = 1 THEN 1 END) as image_shares,
+        COUNT(DISTINCT user_id) as unique_users
+      FROM social_shares 
+      WHERE created_at >= datetime('now', '-${days} days')
+    `;
+    let params = [];
+
+    if (auctionId) {
+      query += ' AND auction_id = ?';
+      params.push(auctionId);
+    }
+
+    query += ' GROUP BY platform ORDER BY total_shares DESC';
+
+    const stmt = this.securityLayer.prepare(query);
+    return stmt.all(...params);
+  }
+
+  getEngagementStats(shareId = null, days = 30) {
+    let query = `
+      SELECT 
+        se.engagement_type,
+        COUNT(*) as count,
+        COUNT(DISTINCT se.ip_address) as unique_ips
+      FROM share_engagement se
+      JOIN social_shares ss ON se.share_id = ss.id
+      WHERE se.created_at >= datetime('now', '-${days} days')
+    `;
+    let params = [];
+
+    if (shareId) {
+      query += ' AND se.share_id = ?';
+      params.push(shareId);
+    }
+
+    query += ' GROUP BY se.engagement_type ORDER BY count DESC';
+
+    const stmt = this.securityLayer.prepare(query);
+    return stmt.all(...params);
+  }
+
+  getTopSharedAuctions(limit = 10, days = 30) {
+    const stmt = this.securityLayer.prepare(`
+      SELECT 
+        a.id,
+        a.title,
+        COUNT(ss.id) as share_count,
+        COUNT(DISTINCT ss.user_id) as unique_sharers,
+        COUNT(se.id) as engagement_count
+      FROM auctions a
+      LEFT JOIN social_shares ss ON a.id = ss.auction_id
+      LEFT JOIN share_engagement se ON ss.id = se.share_id
+      WHERE ss.created_at >= datetime('now', '-${days} days') OR ss.created_at IS NULL
+      GROUP BY a.id, a.title
+      HAVING share_count > 0
+      ORDER BY share_count DESC
+      LIMIT ?
+    `);
+    return stmt.all(limit);
+  }
+
+  getShareAnalytics(days = 30) {
+    const stmt = this.securityLayer.prepare(`
+      SELECT 
+        DATE(ss.created_at) as date,
+        ss.platform,
+        COUNT(ss.id) as shares,
+        COUNT(DISTINCT ss.user_id) as unique_users,
+        COUNT(se.id) as engagements
+      FROM social_shares ss
+      LEFT JOIN share_engagement se ON ss.id = se.share_id
+      WHERE ss.created_at >= datetime('now', '-${days} days')
+      GROUP BY DATE(ss.created_at), ss.platform
+      ORDER BY date DESC, ss.platform
+    `);
+    return stmt.all();
+  }
+
+  // Admin Dashboard Methods
+  
+  // User Management
+  getAllUsers(page = 1, limit = 20, filters = {}) {
+    let query = `
+      SELECT id, username, email, role, failed_login_attempts, last_failed_login, 
+             locked_until, is_active, email_verified, created_at, updated_at
+      FROM users
+      WHERE 1=1
+    `;
+    const params = [];
+    
+    if (filters.role) {
+      query += ` AND role = ?`;
+      params.push(filters.role);
+    }
+    
+    if (filters.status) {
+      query += ` AND is_active = ?`;
+      params.push(filters.status === 'active' ? 1 : 0);
+    }
+    
+    if (filters.search) {
+      query += ` AND (username LIKE ? OR email LIKE ?)`;
+      params.push(`%${filters.search}%`, `%${filters.search}%`);
+    }
+    
+    query += ` ORDER BY created_at DESC LIMIT ? OFFSET ?`;
+    params.push(limit, (page - 1) * limit);
+    
+    const stmt = this.securityLayer.prepare(query);
+    const users = stmt.all(...params);
+    
+    // Get total count
+    const countQuery = query.replace(/SELECT.*?FROM/, 'SELECT COUNT(*) FROM').replace(/ORDER BY.*$/, '');
+    const countStmt = this.securityLayer.prepare(countQuery);
+    const total = countStmt.get(...params.slice(0, -2)).count;
+    
+    return { users, total, page, totalPages: Math.ceil(total / limit) };
+  }
+  
+  updateUserRole(userId, newRole, adminId) {
+    const user = this.getUser(userId);
+    if (!user) throw new Error('User not found');
+    
+    const oldRole = user.role;
+    const stmt = this.securityLayer.prepare(`
+      UPDATE users 
+      SET role = ?, updated_at = CURRENT_TIMESTAMP 
+      WHERE id = ?
+    `);
+    
+    const result = stmt.run(newRole, userId);
+    
+    if (result.changes > 0) {
+      this.logAuditAction(adminId, 'update_role', 'user', userId, oldRole, newRole);
+    }
+    
+    return result.changes > 0;
+  }
+  
+  toggleUserStatus(userId, adminId) {
+    const user = this.getUser(userId);
+    if (!user) throw new Error('User not found');
+    
+    const newStatus = user.is_active ? 0 : 1;
+    const stmt = this.securityLayer.prepare(`
+      UPDATE users 
+      SET is_active = ?, updated_at = CURRENT_TIMESTAMP 
+      WHERE id = ?
+    `);
+    
+    const result = stmt.run(newStatus, userId);
+    
+    if (result.changes > 0) {
+      this.logAuditAction(adminId, 'toggle_status', 'user', userId, user.is_active.toString(), newStatus.toString());
+    }
+    
+    return result.changes > 0;
+  }
+  
+  // Auction Moderation
+  getAllAuctionsForAdmin(page = 1, limit = 20, filters = {}) {
+    let query = `
+      SELECT a.*, u.username as creator_username, w.username as winner_username
+      FROM auctions a
+      LEFT JOIN users u ON a.creator_id = u.id
+      LEFT JOIN users w ON a.winner_id = w.id
+      WHERE 1=1
+    `;
+    const params = [];
+    
+    if (filters.status) {
+      query += ` AND a.status = ?`;
+      params.push(filters.status);
+    }
+    
+    if (filters.search) {
+      query += ` AND (a.title LIKE ? OR a.description LIKE ?)`;
+      params.push(`%${filters.search}%`, `%${filters.search}%`);
+    }
+    
+    query += ` ORDER BY a.created_at DESC LIMIT ? OFFSET ?`;
+    params.push(limit, (page - 1) * limit);
+    
+    const stmt = this.securityLayer.prepare(query);
+    const auctions = stmt.all(...params);
+    
+    // Get total count
+    const countQuery = query.replace(/SELECT.*?FROM/, 'SELECT COUNT(*) FROM').replace(/ORDER BY.*$/, '');
+    const countStmt = this.securityLayer.prepare(countQuery);
+    const total = countStmt.get(...params.slice(0, -2)).count;
+    
+    return { auctions, total, page, totalPages: Math.ceil(total / limit) };
+  }
+  
+  moderateAuction(auctionId, action, adminId, reason = '') {
+    const auction = this.getAuction(auctionId);
+    if (!auction) throw new Error('Auction not found');
+    
+    let newStatus;
+    switch (action) {
+      case 'close':
+        newStatus = 'closed';
+        break;
+      case 'cancel':
+        newStatus = 'cancelled';
+        break;
+      case 'reopen':
+        newStatus = 'active';
+        break;
+      default:
+        throw new Error('Invalid moderation action');
+    }
+    
+    const stmt = this.securityLayer.prepare(`
+      UPDATE auctions 
+      SET status = ?, updated_at = CURRENT_TIMESTAMP 
+      WHERE id = ?
+    `);
+    
+    const result = stmt.run(newStatus, auctionId);
+    
+    if (result.changes > 0) {
+      this.logAuditAction(adminId, 'moderate_auction', 'auction', auctionId, auction.status, newStatus, reason);
+    }
+    
+    return result.changes > 0;
+  }
+  
+  // System Statistics
+  getSystemStats() {
+    const stats = {};
+    
+    // User stats
+    const userStats = this.securityLayer.prepare(`
+      SELECT 
+        COUNT(*) as total_users,
+        COUNT(CASE WHEN role = 'admin' THEN 1 END) as admin_users,
+        COUNT(CASE WHEN role = 'moderator' THEN 1 END) as moderator_users,
+        COUNT(CASE WHEN is_active = 1 THEN 1 END) as active_users,
+        COUNT(CASE WHEN created_at >= datetime('now', '-30 days') THEN 1 END) as new_users_30d
+      FROM users
+    `).get();
+    stats.users = userStats;
+    
+    // Auction stats
+    const auctionStats = this.securityLayer.prepare(`
+      SELECT 
+        COUNT(*) as total_auctions,
+        COUNT(CASE WHEN status = 'active' THEN 1 END) as active_auctions,
+        COUNT(CASE WHEN status = 'closed' THEN 1 END) as closed_auctions,
+        COUNT(CASE WHEN status = 'cancelled' THEN 1 END) as cancelled_auctions,
+        COUNT(CASE WHEN created_at >= datetime('now', '-30 days') THEN 1 END) as new_auctions_30d
+      FROM auctions
+    `).get();
+    stats.auctions = auctionStats;
+    
+    // Bid stats
+    const bidStats = this.securityLayer.prepare(`
+      SELECT 
+        COUNT(*) as total_bids,
+        COUNT(CASE WHEN timestamp >= datetime('now', '-30 days') THEN 1 END) as bids_30d,
+        AVG(amount) as avg_bid_amount,
+        MAX(amount) as highest_bid
+      FROM bids
+    `).get();
+    stats.bids = bidStats;
+    
+    // Revenue stats
+    const revenueStats = this.securityLayer.prepare(`
+      SELECT 
+        COUNT(*) as total_transactions,
+        COUNT(CASE WHEN status = 'completed' THEN 1 END) as completed_transactions,
+        SUM(CASE WHEN status = 'completed' THEN amount ELSE 0 END) as total_revenue,
+        SUM(CASE WHEN status = 'completed' AND created_at >= datetime('now', '-30 days') THEN amount ELSE 0 END) as revenue_30d
+      FROM revenue_tracking
+    `).get();
+    stats.revenue = revenueStats;
+    
+    return stats;
+  }
+  
+  // Revenue Tracking
+  getRevenueTracking(page = 1, limit = 20, filters = {}) {
+    let query = `
+      SELECT rt.*, a.title as auction_title
+      FROM revenue_tracking rt
+      LEFT JOIN auctions a ON rt.auction_id = a.id
+      WHERE 1=1
+    `;
+    const params = [];
+    
+    if (filters.status) {
+      query += ` AND rt.status = ?`;
+      params.push(filters.status);
+    }
+    
+    if (filters.transaction_type) {
+      query += ` AND rt.transaction_type = ?`;
+      params.push(filters.transaction_type);
+    }
+    
+    query += ` ORDER BY rt.created_at DESC LIMIT ? OFFSET ?`;
+    params.push(limit, (page - 1) * limit);
+    
+    const stmt = this.securityLayer.prepare(query);
+    const transactions = stmt.all(...params);
+    
+    // Get total count
+    const countQuery = query.replace(/SELECT.*?FROM/, 'SELECT COUNT(*) FROM').replace(/ORDER BY.*$/, '');
+    const countStmt = this.securityLayer.prepare(countQuery);
+    const total = countStmt.get(...params.slice(0, -2)).count;
+    
+    return { transactions, total, page, totalPages: Math.ceil(total / limit) };
+  }
+  
+  // Security Monitoring
+  getSecurityAlerts(page = 1, limit = 20, filters = {}) {
+    let query = `
+      SELECT sa.*, u.username as user_username
+      FROM security_alerts sa
+      LEFT JOIN users u ON sa.user_id = u.id
+      WHERE 1=1
+    `;
+    const params = [];
+    
+    if (filters.severity) {
+      query += ` AND sa.severity = ?`;
+      params.push(filters.severity);
+    }
+    
+    if (filters.status) {
+      query += ` AND sa.status = ?`;
+      params.push(filters.status);
+    }
+    
+    query += ` ORDER BY sa.created_at DESC LIMIT ? OFFSET ?`;
+    params.push(limit, (page - 1) * limit);
+    
+    const stmt = this.securityLayer.prepare(query);
+    const alerts = stmt.all(...params);
+    
+    // Get total count
+    const countQuery = query.replace(/SELECT.*?FROM/, 'SELECT COUNT(*) FROM').replace(/ORDER BY.*$/, '');
+    const countStmt = this.securityLayer.prepare(countQuery);
+    const total = countStmt.get(...params.slice(0, -2)).count;
+    
+    return { alerts, total, page, totalPages: Math.ceil(total / limit) };
+  }
+  
+  updateSecurityAlert(alertId, status, resolvedBy, notes = '') {
+    const stmt = this.securityLayer.prepare(`
+      UPDATE security_alerts 
+      SET status = ?, resolved_at = CURRENT_TIMESTAMP, resolved_by = ?, details = ?
+      WHERE id = ?
+    `);
+    
+    const result = stmt.run(status, resolvedBy, notes, alertId);
+    return result.changes > 0;
+  }
+  
+  // Configuration Management
+  getSystemConfig(category = null) {
+    let query = 'SELECT * FROM system_config';
+    const params = [];
+    
+    if (category) {
+      query += ' WHERE category = ?';
+      params.push(category);
+    }
+    
+    query += ' ORDER BY category, key';
+    
+    const stmt = this.securityLayer.prepare(query);
+    return stmt.all(...params);
+  }
+  
+  updateSystemConfig(key, value, adminId, description = '') {
+    const stmt = this.securityLayer.prepare(`
+      UPDATE system_config 
+      SET value = ?, updated_at = CURRENT_TIMESTAMP, description = ?
+      WHERE key = ?
+    `);
+    
+    const result = stmt.run(value, description, key);
+    
+    if (result.changes > 0) {
+      this.logAuditAction(adminId, 'update_config', 'config', key, '', `${key}: ${value}`);
+    }
+    
+    return result.changes > 0;
+  }
+  
+  createSystemConfig(key, value, category, description, isPublic = false, adminId) {
+    const stmt = this.securityLayer.prepare(`
+      INSERT INTO system_config (id, key, value, category, description, is_public)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `);
+    
+    const configId = this.generateId();
+    const result = stmt.run(configId, key, value, category, description, isPublic ? 1 : 0);
+    
+    if (result.changes > 0) {
+      this.logAuditAction(adminId, 'create_config', 'config', configId, '', `${key}: ${value}`);
+    }
+    
+    return result.changes > 0;
+  }
+  
+  // Audit Logging
+  logAuditAction(adminId, action, targetType, targetId, oldValues = '', newValues = '', ipAddress = '', userAgent = '') {
+    const stmt = this.securityLayer.prepare(`
+      INSERT INTO audit_logs (id, admin_id, action, target_type, target_id, old_values, new_values, ip_address, user_agent)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    
+    stmt.run(this.generateId(), adminId, action, targetType, targetId, oldValues, newValues, ipAddress, userAgent);
+  }
+  
+  getAuditLogs(page = 1, limit = 20, filters = {}) {
+    let query = `
+      SELECT al.*, u.username as admin_username
+      FROM audit_logs al
+      LEFT JOIN users u ON al.admin_id = u.id
+      WHERE 1=1
+    `;
+    const params = [];
+    
+    if (filters.action) {
+      query += ` AND al.action = ?`;
+      params.push(filters.action);
+    }
+    
+    if (filters.target_type) {
+      query += ` AND al.target_type = ?`;
+      params.push(filters.target_type);
+    }
+    
+    if (filters.admin_id) {
+      query += ` AND al.admin_id = ?`;
+      params.push(filters.admin_id);
+    }
+    
+    query += ` ORDER BY al.created_at DESC LIMIT ? OFFSET ?`;
+    params.push(limit, (page - 1) * limit);
+    
+    const stmt = this.securityLayer.prepare(query);
+    const logs = stmt.all(...params);
+    
+    // Get total count
+    const countQuery = query.replace(/SELECT.*?FROM/, 'SELECT COUNT(*) FROM').replace(/ORDER BY.*$/, '');
+    const countStmt = this.securityLayer.prepare(countQuery);
+    const total = countStmt.get(...params.slice(0, -2)).count;
+    
+    return { logs, total, page, totalPages: Math.ceil(total / limit) };
+  }
+  
   // Utility methods
   close() {
     this.db.close();

@@ -303,6 +303,32 @@ function generateAuctionId() {
   return uuidv4();
 }
 
+// Admin Authentication Middleware
+function authenticateAdmin(req, res, next) {
+  const authHeader = req.headers['authorization'];
+  const token = authHeader && authHeader.split(' ')[1];
+
+  if (!token) {
+    return res.status(401).json({ error: 'Admin access token required' });
+  }
+
+  jwt.verify(token, JWT_SECRET, (err, user) => {
+    if (err) {
+      return res.status(403).json({ error: 'Invalid or expired token' });
+    }
+
+    // Check if user has admin or moderator role
+    const dbUser = db.getUserById(user.id);
+    if (!dbUser || (dbUser.role !== 'admin' && dbUser.role !== 'moderator')) {
+      return res.status(403).json({ error: 'Admin access required' });
+    }
+
+    req.user = user;
+    req.userRole = dbUser.role;
+    next();
+  });
+}
+
 // JWT Authentication Middleware
 function authenticateToken(req, res, next) {
   const authHeader = req.headers['authorization'];
@@ -345,7 +371,7 @@ function checkAccountLockout(req, res, next) {
 // Generate JWT Token
 function generateToken(user) {
   return jwt.sign(
-    { userId: user.id, username: user.username },
+    { id: user.id, userId: user.id, username: user.username, role: user.role },
     JWT_SECRET,
     { expiresIn: '24h' }
   );
@@ -870,8 +896,10 @@ app.post('/api/auth/login',
     const token = generateToken(user);
     
     res.sendData({ 
-      userId: user.id, 
+      id: user.id, 
+      userId: user.id,
       username: user.username,
+      role: user.role,
       token: token,
       expiresIn: '24h',
       _links: {
@@ -985,6 +1013,539 @@ app.get('/api/auth/status', (req, res) => {
       login: { href: '/api/auth/login', method: 'POST' }
     }
   });
+});
+
+// Admin Dashboard API endpoints
+
+// Dashboard statistics
+app.get('/api/admin/dashboard/stats', authenticateAdmin, (req, res) => {
+  try {
+    const stats = db.getSystemStats();
+    const securityAlerts = db.getSecurityAlerts(1, 10, { status: 'open' });
+
+    res.json({
+      ...stats,
+      security: {
+        openAlerts: securityAlerts.total,
+        criticalAlerts: securityAlerts.alerts.filter(alert => alert.severity === 'critical').length
+      }
+    });
+  } catch (error) {
+    logError('Error getting admin dashboard stats:', error, { endpoint: '/api/admin/dashboard/stats' });
+    res.status(500).json({ error: 'Failed to get dashboard statistics' });
+  }
+});
+
+// User management endpoints
+app.get('/api/admin/users', authenticateAdmin, (req, res) => {
+  try {
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 20;
+    const filters = {
+      role: req.query.role,
+      status: req.query.status,
+      search: req.query.search
+    };
+    
+    // Remove undefined filters
+    Object.keys(filters).forEach(key => filters[key] === undefined && delete filters[key]);
+    
+    const result = db.getAllUsers(page, limit, filters);
+    
+    res.json(result);
+  } catch (error) {
+    logError('Error getting users:', error, { endpoint: '/api/admin/users' });
+    res.status(500).json({ error: 'Failed to get users' });
+  }
+});
+
+app.patch('/api/admin/users/:id/role', authenticateAdmin, (req, res) => {
+  try {
+    const { role } = req.body;
+    const userId = req.params.id;
+    
+    if (!['user', 'admin', 'moderator'].includes(role)) {
+      return res.status(400).json({ error: 'Invalid role' });
+    }
+
+    // Update user role
+    const success = db.updateUserRole(userId, role, req.user.id);
+    
+    if (!success) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    res.json({ message: 'User role updated successfully' });
+  } catch (error) {
+    logError('Error updating user role:', error, { endpoint: '/api/admin/users/:id/role' });
+    res.status(500).json({ error: 'Failed to update user role' });
+  }
+});
+
+app.patch('/api/admin/users/:id/status', authenticateAdmin, (req, res) => {
+  try {
+    const userId = req.params.id;
+    
+    // Toggle user status
+    const success = db.toggleUserStatus(userId, req.user.id);
+    
+    if (!success) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    res.json({ message: 'User status updated successfully' });
+  } catch (error) {
+    logError('Error updating user status:', error, { endpoint: '/api/admin/users/:id/status' });
+    res.status(500).json({ error: 'Failed to update user status' });
+  }
+});
+
+// Auction moderation endpoints
+app.get('/api/admin/auctions', authenticateAdmin, (req, res) => {
+  try {
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 20;
+    const filters = {
+      status: req.query.status,
+      search: req.query.search
+    };
+    
+    // Remove undefined filters
+    Object.keys(filters).forEach(key => filters[key] === undefined && delete filters[key]);
+    
+    const result = db.getAllAuctionsForAdmin(page, limit, filters);
+    
+    res.json(result);
+  } catch (error) {
+    logError('Error getting auctions for moderation:', error, { endpoint: '/api/admin/auctions' });
+    res.status(500).json({ error: 'Failed to get auctions' });
+  }
+});
+
+app.patch('/api/admin/auctions/:id/status', authenticateAdmin, (req, res) => {
+  try {
+    const { action, reason } = req.body;
+    const auctionId = req.params.id;
+    
+    if (!['close', 'cancel', 'reopen'].includes(action)) {
+      return res.status(400).json({ error: 'Invalid moderation action' });
+    }
+
+    // Moderate auction
+    const success = db.moderateAuction(auctionId, action, req.user.id, reason);
+    
+    if (!success) {
+      return res.status(404).json({ error: 'Auction not found' });
+    }
+
+    res.json({ message: 'Auction status updated successfully' });
+  } catch (error) {
+    logError('Error updating auction status:', error, { endpoint: '/api/admin/auctions/:id/status' });
+    res.status(500).json({ error: 'Failed to update auction status' });
+  }
+});
+
+// Revenue tracking endpoints
+app.get('/api/admin/revenue/stats', authenticateAdmin, (req, res) => {
+  try {
+    const days = parseInt(req.query.days) || 30;
+    const revenueStats = db.getSystemStats().revenue;
+    
+    res.json(revenueStats);
+  } catch (error) {
+    logError('Error getting revenue stats:', error, { endpoint: '/api/admin/revenue/stats' });
+    res.status(500).json({ error: 'Failed to get revenue statistics' });
+  }
+});
+
+app.get('/api/admin/revenue/transactions', authenticateAdmin, (req, res) => {
+  try {
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 20;
+    const filters = {
+      status: req.query.status,
+      transaction_type: req.query.transaction_type
+    };
+    
+    // Remove undefined filters
+    Object.keys(filters).forEach(key => filters[key] === undefined && delete filters[key]);
+    
+    const result = db.getRevenueTracking(page, limit, filters);
+    
+    res.json(result);
+  } catch (error) {
+    logError('Error getting revenue transactions:', error, { endpoint: '/api/admin/revenue/transactions' });
+    res.status(500).json({ error: 'Failed to get revenue transactions' });
+  }
+});
+
+// Security monitoring endpoints
+app.get('/api/admin/security/alerts', authenticateAdmin, (req, res) => {
+  try {
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 20;
+    const filters = {
+      severity: req.query.severity,
+      status: req.query.status
+    };
+    
+    // Remove undefined filters
+    Object.keys(filters).forEach(key => filters[key] === undefined && delete filters[key]);
+    
+    const result = db.getSecurityAlerts(page, limit, filters);
+    
+    res.json(result);
+  } catch (error) {
+    logError('Error getting security alerts:', error, { endpoint: '/api/admin/security/alerts' });
+    res.status(500).json({ error: 'Failed to get security alerts' });
+  }
+});
+
+app.patch('/api/admin/security/alerts/:id/status', authenticateAdmin, (req, res) => {
+  try {
+    const { status, notes } = req.body;
+    const alertId = req.params.id;
+    
+    if (!['open', 'investigating', 'resolved', 'false_positive'].includes(status)) {
+      return res.status(400).json({ error: 'Invalid alert status' });
+    }
+
+    // Update alert status
+    const success = db.updateSecurityAlert(alertId, status, req.user.id, notes);
+    
+    if (!success) {
+      return res.status(404).json({ error: 'Security alert not found' });
+    }
+
+    res.json({ message: 'Security alert status updated successfully' });
+  } catch (error) {
+    logError('Error updating security alert status:', error, { endpoint: '/api/admin/security/alerts/:id/status' });
+    res.status(500).json({ error: 'Failed to update security alert status' });
+  }
+});
+
+app.get('/api/admin/security/logs', authenticateAdmin, (req, res) => {
+  try {
+    const level = req.query.level;
+    const limit = parseInt(req.query.limit) || 100;
+    const logs = db.getSystemLogs(level, limit);
+    
+    res.json(logs);
+  } catch (error) {
+    logError('Error getting security logs:', error, { endpoint: '/api/admin/security/logs' });
+    res.status(500).json({ error: 'Failed to get security logs' });
+  }
+});
+
+// Configuration management endpoints
+app.get('/api/admin/config', authenticateAdmin, (req, res) => {
+  try {
+    const category = req.query.category;
+    const config = db.getSystemConfig(category);
+    
+    res.json(config);
+  } catch (error) {
+    logError('Error getting system config:', error, { endpoint: '/api/admin/config' });
+    res.status(500).json({ error: 'Failed to get system configuration' });
+  }
+});
+
+app.post('/api/admin/config', authenticateAdmin, (req, res) => {
+  try {
+    const { key, value, description, category, isPublic } = req.body;
+    
+    if (!key || value === undefined) {
+      return res.status(400).json({ error: 'Key and value are required' });
+    }
+
+    // Create configuration
+    const success = db.createSystemConfig(key, value, category || 'general', description, isPublic || false, req.user.id);
+    
+    if (!success) {
+      return res.status(400).json({ error: 'Failed to create configuration' });
+    }
+
+    res.json({ message: 'Configuration created successfully' });
+  } catch (error) {
+    logError('Error creating system config:', error, { endpoint: '/api/admin/config' });
+    res.status(500).json({ error: 'Failed to create system configuration' });
+  }
+});
+
+app.put('/api/admin/config/:key', authenticateAdmin, (req, res) => {
+  try {
+    const { value, description } = req.body;
+    const key = req.params.key;
+    
+    if (value === undefined) {
+      return res.status(400).json({ error: 'Value is required' });
+    }
+
+    // Update configuration
+    const success = db.updateSystemConfig(key, value, req.user.id, description);
+    
+    if (!success) {
+      return res.status(404).json({ error: 'Configuration not found' });
+    }
+
+    res.json({ message: 'Configuration updated successfully' });
+  } catch (error) {
+    logError('Error updating system config:', error, { endpoint: '/api/admin/config/:key' });
+    res.status(500).json({ error: 'Failed to update system configuration' });
+  }
+});
+
+// Audit logs endpoint
+app.get('/api/admin/audit/logs', authenticateAdmin, (req, res) => {
+  try {
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 20;
+    const filters = {
+      action: req.query.action,
+      target_type: req.query.target_type,
+      admin_id: req.query.admin_id
+    };
+    
+    // Remove undefined filters
+    Object.keys(filters).forEach(key => filters[key] === undefined && delete filters[key]);
+    
+    const result = db.getAuditLogs(page, limit, filters);
+    
+    res.json(result);
+  } catch (error) {
+    logError('Error getting audit logs:', error, { endpoint: '/api/admin/audit/logs' });
+    res.status(500).json({ error: 'Failed to get audit logs' });
+  }
+});
+
+// Social Sharing API endpoints
+
+// Generate shareable content and track shares
+app.post('/api/share', (req, res) => {
+  try {
+    const { auctionId, platform, customMessage, generateImage } = req.body;
+    
+    if (!auctionId || !platform) {
+      return res.status(400).json({ error: 'Auction ID and platform are required' });
+    }
+
+    if (!['twitter', 'facebook', 'linkedin', 'whatsapp', 'telegram', 'email', 'copy_link'].includes(platform)) {
+      return res.status(400).json({ error: 'Invalid platform' });
+    }
+
+    // Get auction details
+    const auction = db.getAuction(auctionId);
+    if (!auction) {
+      return res.status(404).json({ error: 'Auction not found' });
+    }
+
+    // Generate share URL
+    const baseUrl = process.env.BASE_URL || 'http://localhost:3000';
+    const shareUrl = `${baseUrl}/auction/${auctionId}`;
+    
+    // Generate default message if custom message not provided
+    let message = customMessage;
+    if (!message) {
+      message = `Check out this auction: "${auction.title}" - Starting bid: $${auction.starting_bid}`;
+    }
+
+    // Generate image if requested
+    let imageGenerated = false;
+    if (generateImage) {
+      // This would integrate with an image generation service
+      // For now, we'll just mark it as generated
+      imageGenerated = true;
+    }
+
+    // Track the share
+    const userId = req.user ? req.user.id : null;
+    const shareResult = db.createSocialShare(
+      auctionId,
+      platform,
+      shareUrl,
+      message,
+      imageGenerated,
+      userId,
+      req.ip,
+      req.get('User-Agent')
+    );
+
+    // Generate platform-specific share URLs
+    const encodedMessage = encodeURIComponent(message);
+    const encodedUrl = encodeURIComponent(shareUrl);
+    let platformUrl = '';
+
+    switch (platform) {
+      case 'twitter':
+        platformUrl = `https://twitter.com/intent/tweet?text=${encodedMessage}&url=${encodedUrl}`;
+        break;
+      case 'facebook':
+        platformUrl = `https://www.facebook.com/sharer/sharer.php?u=${encodedUrl}&quote=${encodedMessage}`;
+        break;
+      case 'linkedin':
+        platformUrl = `https://www.linkedin.com/sharing/share-offsite/?url=${encodedUrl}`;
+        break;
+      case 'whatsapp':
+        platformUrl = `https://wa.me/?text=${encodedMessage}%20${encodedUrl}`;
+        break;
+      case 'telegram':
+        platformUrl = `https://t.me/share/url?url=${encodedUrl}&text=${encodedMessage}`;
+        break;
+      case 'email':
+        platformUrl = `mailto:?subject=${encodeURIComponent(`Auction: ${auction.title}`)}&body=${encodedMessage}%20${encodedUrl}`;
+        break;
+      case 'copy_link':
+        platformUrl = shareUrl;
+        break;
+    }
+
+    res.json({
+      shareId: shareResult.lastInsertRowid,
+      platformUrl,
+      shareUrl,
+      message,
+      imageGenerated
+    });
+  } catch (error) {
+    logError('Error creating share:', error, { endpoint: '/api/share' });
+    res.status(500).json({ error: 'Failed to create share' });
+  }
+});
+
+// Track share engagement
+app.post('/api/share/:shareId/engage', (req, res) => {
+  try {
+    const { shareId } = req.params;
+    const { engagementType, referrerUrl } = req.body;
+    
+    if (!['click', 'view', 'conversion'].includes(engagementType)) {
+      return res.status(400).json({ error: 'Invalid engagement type' });
+    }
+
+    // Track engagement
+    db.trackShareEngagement(
+      shareId,
+      engagementType,
+      referrerUrl,
+      req.ip,
+      req.get('User-Agent')
+    );
+
+    res.json({ message: 'Engagement tracked successfully' });
+  } catch (error) {
+    logError('Error tracking engagement:', error, { endpoint: '/api/share/:shareId/engage' });
+    res.status(500).json({ error: 'Failed to track engagement' });
+  }
+});
+
+// Get share statistics for an auction
+app.get('/api/auctions/:auctionId/shares/stats', (req, res) => {
+  try {
+    const { auctionId } = req.params;
+    const days = parseInt(req.query.days) || 30;
+    
+    const shareStats = db.getShareStats(auctionId, days);
+    const engagementStats = db.getEngagementStats(null, days);
+    
+    res.json({
+      shareStats,
+      engagementStats
+    });
+  } catch (error) {
+    logError('Error getting share stats:', error, { endpoint: '/api/auctions/:auctionId/shares/stats' });
+    res.status(500).json({ error: 'Failed to get share statistics' });
+  }
+});
+
+// Get share analytics (admin only)
+app.get('/api/admin/shares/analytics', authenticateAdmin, (req, res) => {
+  try {
+    const days = parseInt(req.query.days) || 30;
+    const analytics = db.getShareAnalytics(days);
+    const topAuctions = db.getTopSharedAuctions(10, days);
+    
+    res.json({
+      analytics,
+      topAuctions
+    });
+  } catch (error) {
+    logError('Error getting share analytics:', error, { endpoint: '/api/admin/shares/analytics' });
+    res.status(500).json({ error: 'Failed to get share analytics' });
+  }
+});
+
+// Generate share image
+app.post('/api/share/generate-image', async (req, res) => {
+  try {
+    const { auctionId, template } = req.body;
+    
+    if (!auctionId) {
+      return res.status(400).json({ error: 'Auction ID is required' });
+    }
+
+    // Get auction details
+    const auction = db.getAuction(auctionId);
+    if (!auction) {
+      return res.status(404).json({ error: 'Auction not found' });
+    }
+
+    // Generate image (simplified implementation)
+    // In production, this would use a service like Canvas API, Sharp, or external image service
+    const imageUrl = `/api/share/image/${auctionId}?template=${template || 'default'}`;
+    
+    res.json({
+      imageUrl,
+      generated: true
+    });
+  } catch (error) {
+    logError('Error generating share image:', error, { endpoint: '/api/share/generate-image' });
+    res.status(500).json({ error: 'Failed to generate share image' });
+  }
+});
+
+// Serve generated share images
+app.get('/api/share/image/:auctionId', (req, res) => {
+  try {
+    const { auctionId } = req.params;
+    const template = req.query.template || 'default';
+    
+    // Get auction details
+    const auction = db.getAuction(auctionId);
+    if (!auction) {
+      return res.status(404).json({ error: 'Auction not found' });
+    }
+
+    // Generate a simple SVG image (in production, use a proper image generation library)
+    const svg = `
+      <svg width="1200" height="630" xmlns="http://www.w3.org/2000/svg">
+        <defs>
+          <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" style="stop-color:#667eea;stop-opacity:1" />
+            <stop offset="100%" style="stop-color:#764ba2;stop-opacity:1" />
+          </linearGradient>
+        </defs>
+        <rect width="1200" height="630" fill="url(#bg)"/>
+        <text x="600" y="200" font-family="Arial, sans-serif" font-size="48" fill="white" text-anchor="middle">
+          ${auction.title.substring(0, 50)}${auction.title.length > 50 ? '...' : ''}
+        </text>
+        <text x="600" y="280" font-family="Arial, sans-serif" font-size="32" fill="white" text-anchor="middle">
+          Starting Bid: $${auction.starting_bid}
+        </text>
+        <text x="600" y="350" font-family="Arial, sans-serif" font-size="24" fill="white" text-anchor="middle">
+          Ends: ${new Date(auction.end_time).toLocaleDateString()}
+        </text>
+        <text x="600" y="450" font-family="Arial, sans-serif" font-size="28" fill="white" text-anchor="middle">
+          Sealed Auction Platform
+        </text>
+      </svg>
+    `;
+
+    res.setHeader('Content-Type', 'image/svg+xml');
+    res.send(svg);
+  } catch (error) {
+    logError('Error serving share image:', error, { endpoint: '/api/share/image/:auctionId' });
+    res.status(500).json({ error: 'Failed to serve share image' });
+  }
 });
 
 // Socket.io connections
