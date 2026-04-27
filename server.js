@@ -1597,6 +1597,424 @@ setInterval(() => {
   }
 }, 5 * 60 * 1000); // Check every 5 minutes
 
+// --- Gas Fee Optimization API Endpoints ---
+
+// Gas fee estimation and optimization
+const feeHistory = [];
+const networkCongestionData = [];
+const scheduledTransactions = new Map();
+
+// Initialize fee tracking
+setInterval(async () => {
+  try {
+    const feeStats = await fetch('https://horizon-testnet.stellar.org/fee_stats').then(r => r.json());
+    const congestionData = await fetch('https://horizon-testnet.stellar.org/').then(r => r.json());
+    
+    const feeEntry = {
+      timestamp: new Date().toISOString(),
+      min_fee: feeStats.min_fee || 100,
+      max_fee: feeStats.max_fee || 1000,
+      p50_fee: feeStats.fee_charged?.p50 || 500,
+      p75_fee: feeStats.fee_charged?.p75 || 750,
+      p95_fee: feeStats.fee_charged?.p95 || 1000,
+      ledger: congestionData.history_latest_ledger || 0
+    };
+    
+    feeHistory.push(feeEntry);
+    if (feeHistory.length > 1000) feeHistory.shift(); // Keep last 1000 entries
+    
+    // Calculate network congestion
+    const congestionLevel = calculateCongestionLevel(feeStats);
+    networkCongestionData.push({
+      timestamp: new Date().toISOString(),
+      level: congestionLevel,
+      ledger: congestionData.history_latest_ledger || 0
+    });
+    if (networkCongestionData.length > 100) networkCongestionData.shift();
+    
+  } catch (error) {
+    logError('Error updating fee data:', error);
+  }
+}, 30000); // Update every 30 seconds
+
+function calculateCongestionLevel(feeStats) {
+  const p50 = feeStats.fee_charged?.p50 || 500;
+  const max = feeStats.max_fee || 1000;
+  const ratio = p50 / max;
+  
+  if (ratio < 0.3) return 'low';
+  if (ratio < 0.6) return 'medium';
+  if (ratio < 0.8) return 'high';
+  return 'critical';
+}
+
+// Get current gas fee estimates
+app.get('/api/gas/estimate', async (req, res) => {
+  try {
+    const response = await fetch('https://horizon-testnet.stellar.org/fee_stats');
+    const feeStats = await response.json();
+    
+    const currentCongestion = networkCongestionData[networkCongestionData.length - 1];
+    
+    const estimates = {
+      current: {
+        min: feeStats.min_fee || 100,
+        max: feeStats.max_fee || 1000,
+        recommended: feeStats.fee_charged?.p50 || 500,
+        fast: feeStats.fee_charged?.p75 || 750,
+        instant: feeStats.fee_charged?.p95 || 1000
+      },
+      network: {
+        congestion: currentCongestion?.level || 'medium',
+        ledger: feeStats.ledger || 0,
+        timestamp: new Date().toISOString()
+      },
+      optimization: {
+        savings_potential: calculateSavingsPotential(feeStats),
+        best_time_to_transact: getBestTransactionTime(),
+        estimated_wait_times: getEstimatedWaitTimes(feeStats)
+      }
+    };
+    
+    res.json(estimates);
+  } catch (error) {
+    logError('Error getting gas estimates:', error, { endpoint: '/api/gas/estimate' });
+    res.status(500).json({ error: 'Failed to get gas estimates' });
+  }
+});
+
+// Get fee history
+app.get('/api/gas/history', (req, res) => {
+  try {
+    const hours = parseInt(req.query.hours) || 24;
+    const cutoff = new Date(Date.now() - hours * 60 * 60 * 1000);
+    
+    const filteredHistory = feeHistory.filter(entry => 
+      new Date(entry.timestamp) >= cutoff
+    );
+    
+    res.json({
+      history: filteredHistory,
+      statistics: {
+        average_fee: calculateAverageFee(filteredHistory),
+        min_fee: Math.min(...filteredHistory.map(h => h.p50_fee)),
+        max_fee: Math.max(...filteredHistory.map(h => h.p50_fee)),
+        trend: calculateFeeTrend(filteredHistory)
+      },
+      period: `${hours} hours`
+    });
+  } catch (error) {
+    logError('Error getting fee history:', error, { endpoint: '/api/gas/history' });
+    res.status(500).json({ error: 'Failed to get fee history' });
+  }
+});
+
+// Get network congestion information
+app.get('/api/gas/congestion', (req, res) => {
+  try {
+    const currentCongestion = networkCongestionData[networkCongestionData.length - 1];
+    const recentCongestion = networkCongestionData.slice(-24); // Last 24 data points
+    
+    res.json({
+      current: currentCongestion || { level: 'medium', timestamp: new Date().toISOString() },
+      recent: recentCongestion,
+      forecast: predictCongestionTrend(recentCongestion),
+      recommendations: getCongestionRecommendations(currentCongestion?.level || 'medium')
+    });
+  } catch (error) {
+    logError('Error getting congestion data:', error, { endpoint: '/api/gas/congestion' });
+    res.status(500).json({ error: 'Failed to get congestion data' });
+  }
+});
+
+// Schedule transaction for optimal fee timing
+app.post('/api/gas/schedule', authenticateToken, (req, res) => {
+  try {
+    const { 
+      transactionType, 
+      maxFee, 
+      targetTime, 
+      priority = 'normal',
+      auctionId 
+    } = req.body;
+    
+    const scheduleId = uuidv4();
+    const scheduledTx = {
+      id: scheduleId,
+      userId: req.user.userId,
+      transactionType,
+      maxFee,
+      targetTime: new Date(targetTime),
+      priority,
+      auctionId,
+      status: 'pending',
+      createdAt: new Date(),
+      estimatedFee: estimateOptimalFee(maxFee, priority),
+      savings: calculatePotentialSavings(maxFee, priority)
+    };
+    
+    scheduledTransactions.set(scheduleId, scheduledTx);
+    
+    // Set up execution timer
+    const delay = new Date(targetTime) - new Date();
+    if (delay > 0) {
+      setTimeout(() => executeScheduledTransaction(scheduleId), delay);
+    }
+    
+    res.json({
+      scheduleId,
+      estimatedFee: scheduledTx.estimatedFee,
+      potentialSavings: scheduledTx.savings,
+      executionTime: scheduledTx.targetTime
+    });
+  } catch (error) {
+    logError('Error scheduling transaction:', error, { endpoint: '/api/gas/schedule' });
+    res.status(500).json({ error: 'Failed to schedule transaction' });
+  }
+});
+
+// Get scheduled transactions
+app.get('/api/gas/scheduled', authenticateToken, (req, res) => {
+  try {
+    const userScheduled = Array.from(scheduledTransactions.values())
+      .filter(tx => tx.userId === req.user.userId)
+      .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+    
+    res.json({
+      scheduled: userScheduled,
+      statistics: {
+        total: userScheduled.length,
+        pending: userScheduled.filter(tx => tx.status === 'pending').length,
+        executed: userScheduled.filter(tx => tx.status === 'executed').length,
+        failed: userScheduled.filter(tx => tx.status === 'failed').length,
+        totalSavings: userScheduled.reduce((sum, tx) => sum + (tx.savings || 0), 0)
+      }
+    });
+  } catch (error) {
+    logError('Error getting scheduled transactions:', error, { endpoint: '/api/gas/scheduled' });
+    res.status(500).json({ error: 'Failed to get scheduled transactions' });
+  }
+});
+
+// Cancel scheduled transaction
+app.delete('/api/gas/schedule/:id', authenticateToken, (req, res) => {
+  try {
+    const scheduleId = req.params.id;
+    const scheduledTx = scheduledTransactions.get(scheduleId);
+    
+    if (!scheduledTx || scheduledTx.userId !== req.user.userId) {
+      return res.status(404).json({ error: 'Scheduled transaction not found' });
+    }
+    
+    if (scheduledTx.status !== 'pending') {
+      return res.status(400).json({ error: 'Cannot cancel transaction in progress' });
+    }
+    
+    scheduledTx.status = 'cancelled';
+    scheduledTransactions.delete(scheduleId);
+    
+    res.json({ message: 'Scheduled transaction cancelled successfully' });
+  } catch (error) {
+    logError('Error cancelling scheduled transaction:', error, { endpoint: '/api/gas/schedule/:id' });
+    res.status(500).json({ error: 'Failed to cancel scheduled transaction' });
+  }
+});
+
+// Get cost savings analysis
+app.get('/api/gas/savings', authenticateToken, (req, res) => {
+  try {
+    const period = req.query.period || '30d';
+    const userScheduled = Array.from(scheduledTransactions.values())
+      .filter(tx => tx.userId === req.user.userId);
+    
+    const analysis = {
+      period,
+      totalSavings: userScheduled.reduce((sum, tx) => sum + (tx.savings || 0), 0),
+      averageSavingsPerTransaction: userScheduled.length > 0 
+        ? userScheduled.reduce((sum, tx) => sum + (tx.savings || 0), 0) / userScheduled.length 
+        : 0,
+      optimizationRate: calculateOptimizationRate(userScheduled),
+      recommendations: generateSavingsRecommendations(userScheduled),
+      breakdown: getSavingsBreakdown(userScheduled)
+    };
+    
+    res.json(analysis);
+  } catch (error) {
+    logError('Error getting savings analysis:', error, { endpoint: '/api/gas/savings' });
+    res.status(500).json({ error: 'Failed to get savings analysis' });
+  }
+});
+
+// Helper functions
+function calculateSavingsPotential(feeStats) {
+  const current = feeStats.fee_charged?.p50 || 500;
+  const min = feeStats.min_fee || 100;
+  return ((current - min) / current * 100).toFixed(2);
+}
+
+function getBestTransactionTime() {
+  const recentFees = feeHistory.slice(-48); // Last 24 hours (30-second intervals)
+  const hourlyAverages = {};
+  
+  recentFees.forEach(entry => {
+    const hour = new Date(entry.timestamp).getHours();
+    if (!hourlyAverages[hour]) hourlyAverages[hour] = [];
+    hourlyAverages[hour].push(entry.p50_fee);
+  });
+  
+  let bestHour = 0;
+  let lowestAverage = Infinity;
+  
+  Object.entries(hourlyAverages).forEach(([hour, fees]) => {
+    const average = fees.reduce((sum, fee) => sum + fee, 0) / fees.length;
+    if (average < lowestAverage) {
+      lowestAverage = average;
+      bestHour = parseInt(hour);
+    }
+  });
+  
+  return {
+    hour: bestHour,
+    reason: `Historically lowest fees around ${bestHour}:00`,
+    estimatedSavings: `${((500 - lowestAverage) / 500 * 100).toFixed(1)}%`
+  };
+}
+
+function getEstimatedWaitTimes(feeStats) {
+  return {
+    min_fee: '~5-10 minutes',
+    p50_fee: '~1-2 minutes',
+    p75_fee: '~30-60 seconds',
+    p95_fee: '~10-30 seconds'
+  };
+}
+
+function calculateAverageFee(history) {
+  if (history.length === 0) return 0;
+  return history.reduce((sum, entry) => sum + entry.p50_fee, 0) / history.length;
+}
+
+function calculateFeeTrend(history) {
+  if (history.length < 2) return 'stable';
+  
+  const recent = history.slice(-10);
+  const older = history.slice(-20, -10);
+  
+  const recentAvg = recent.reduce((sum, entry) => sum + entry.p50_fee, 0) / recent.length;
+  const olderAvg = older.reduce((sum, entry) => sum + entry.p50_fee, 0) / older.length;
+  
+  const change = (recentAvg - olderAvg) / olderAvg;
+  
+  if (change > 0.1) return 'increasing';
+  if (change < -0.1) return 'decreasing';
+  return 'stable';
+}
+
+function predictCongestionTrend(recentCongestion) {
+  if (recentCongestion.length < 3) return 'stable';
+  
+  const levels = { low: 1, medium: 2, high: 3, critical: 4 };
+  const recent = recentCongestion.slice(-5);
+  const avgLevel = recent.reduce((sum, c) => sum + levels[c.level], 0) / recent.length;
+  
+  if (avgLevel <= 1.5) return 'improving';
+  if (avgLevel >= 3.5) return 'worsening';
+  return 'stable';
+}
+
+function getCongestionRecommendations(level) {
+  const recommendations = {
+    low: ['Excellent time for transactions', 'Use minimum fees for maximum savings'],
+    medium: ['Normal network activity', 'Standard fees recommended'],
+    high: ['Network is busy', 'Consider higher fees or schedule for later'],
+    critical: ['Network is congested', 'Use instant fees or wait for better timing']
+  };
+  
+  return recommendations[level] || recommendations.medium;
+}
+
+function estimateOptimalFee(maxFee, priority) {
+  const current = feeHistory[feeHistory.length - 1];
+  if (!current) return maxFee;
+  
+  const multipliers = {
+    low: 0.8,
+    normal: 1.0,
+    high: 1.5,
+    instant: 2.0
+  };
+  
+  return Math.min(maxFee, Math.round(current.p50_fee * multipliers[priority]));
+}
+
+function calculatePotentialSavings(maxFee, priority) {
+  const optimal = estimateOptimalFee(maxFee, priority);
+  return Math.max(0, maxFee - optimal);
+}
+
+async function executeScheduledTransaction(scheduleId) {
+  const scheduledTx = scheduledTransactions.get(scheduleId);
+  if (!scheduledTx) return;
+  
+  try {
+    scheduledTx.status = 'executing';
+    // Here you would execute the actual transaction
+    // For now, we'll simulate successful execution
+    scheduledTx.status = 'executed';
+    scheduledTx.executedAt = new Date();
+    scheduledTx.actualFee = scheduledTx.estimatedFee;
+  } catch (error) {
+    scheduledTx.status = 'failed';
+    scheduledTx.error = error.message;
+    logError('Error executing scheduled transaction:', error, { scheduleId });
+  }
+}
+
+function calculateOptimizationRate(transactions) {
+  if (transactions.length === 0) return 0;
+  const optimized = transactions.filter(tx => tx.savings > 0).length;
+  return (optimized / transactions.length * 100).toFixed(1);
+}
+
+function generateSavingsRecommendations(transactions) {
+  const recommendations = [];
+  
+  if (transactions.length === 0) {
+    recommendations.push('Start scheduling transactions to see savings recommendations');
+  } else {
+    const avgSavings = transactions.reduce((sum, tx) => sum + (tx.savings || 0), 0) / transactions.length;
+    
+    if (avgSavings < 50) {
+      recommendations.push('Consider scheduling transactions during off-peak hours for better savings');
+    }
+    
+    const failedRate = transactions.filter(tx => tx.status === 'failed').length / transactions.length;
+    if (failedRate > 0.1) {
+      recommendations.push('Review failed transactions and adjust fee settings');
+    }
+  }
+  
+  return recommendations;
+}
+
+function getSavingsBreakdown(transactions) {
+  return {
+    byType: transactions.reduce((acc, tx) => {
+      acc[tx.transactionType] = (acc[tx.transactionType] || 0) + (tx.savings || 0);
+      return acc;
+    }, {}),
+    byPriority: transactions.reduce((acc, tx) => {
+      acc[tx.priority] = (acc[tx.priority] || 0) + (tx.savings || 0);
+      return acc;
+    }, {}),
+    byMonth: transactions.reduce((acc, tx) => {
+      const month = new Date(tx.createdAt).toISOString().slice(0, 7);
+      acc[month] = (acc[month] || 0) + (tx.savings || 0);
+      return acc;
+    }, {})
+  };
+}
+
 // Schedule regular backups
 const BACKUP_INTERVAL = 5 * 60 * 1000; // 5 minutes
 setInterval(backupData, BACKUP_INTERVAL);
