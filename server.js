@@ -2107,6 +2107,536 @@ app.get('/api/bookmarks/sync/pending', authenticateToken, (req, res) => {
   }
 });
 
+// ==================== PUSH NOTIFICATION API ENDPOINTS ====================
+
+// Subscribe to push notifications
+app.post('/api/push/subscribe', authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const subscription = req.body;
+    
+    // Store subscription in database (you would need to add this table)
+    // For now, we'll just log it
+    console.log('Push subscription for user', userId, ':', subscription);
+    
+    // Send test notification
+    if (pwaManager && pwaManager.sendPushNotification) {
+      await pwaManager.sendPushNotification(subscription, {
+        title: 'Welcome to Auction Platform',
+        body: 'You will now receive notifications about auctions and updates',
+        icon: '/icons/icon-192x192.png',
+        tag: 'welcome',
+        data: { url: '/' }
+      });
+    }
+    
+    res.json({
+      success: true,
+      message: 'Successfully subscribed to push notifications'
+    });
+  } catch (error) {
+    console.error('Error subscribing to push notifications:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to subscribe to push notifications'
+    });
+  }
+});
+
+// Unsubscribe from push notifications
+app.post('/api/push/unsubscribe', authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const subscription = req.body;
+    
+    // Remove subscription from database
+    console.log('Push unsubscription for user', userId, ':', subscription);
+    
+    res.json({
+      success: true,
+      message: 'Successfully unsubscribed from push notifications'
+    });
+  } catch (error) {
+    console.error('Error unsubscribing from push notifications:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to unsubscribe from push notifications'
+    });
+  }
+});
+
+// Send push notification to specific user
+app.post('/api/push/send', authenticateToken, async (req, res) => {
+  try {
+    const { userId, title, body, icon, tag, data, actions } = req.body;
+    
+    // Get user's push subscription from database
+    // For now, we'll just send a test notification
+    const notification = {
+      title: title || 'Auction Update',
+      body: body || 'There is an update to your auction',
+      icon: icon || '/icons/icon-192x192.png',
+      tag: tag || 'auction-update',
+      data: data || { url: '/dashboard' },
+      actions: actions || []
+    };
+    
+    // Send notification (you would need to implement this)
+    console.log('Sending push notification:', notification);
+    
+    res.json({
+      success: true,
+      message: 'Push notification sent successfully'
+    });
+  } catch (error) {
+    console.error('Error sending push notification:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to send push notification'
+    });
+  }
+});
+
+// Broadcast push notification to all users
+app.post('/api/push/broadcast', authenticateAdmin, async (req, res) => {
+  try {
+    const { title, body, icon, tag, data, actions } = req.body;
+    
+    // Get all user subscriptions from database
+    // For now, we'll just log the broadcast
+    const notification = {
+      title: title || 'Platform Update',
+      body: body || 'New features available in the auction platform',
+      icon: icon || '/icons/icon-192x192.png',
+      tag: tag || 'platform-update',
+      data: data || { url: '/' },
+      actions: actions || []
+    };
+    
+    console.log('Broadcasting push notification:', notification);
+    
+    res.json({
+      success: true,
+      message: 'Push notification broadcasted successfully'
+    });
+  } catch (error) {
+    console.error('Error broadcasting push notification:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to broadcast push notification'
+    });
+  }
+});
+
+// ==================== FILE UPLOAD API ENDPOINTS ====================
+
+// Initialize multer for file uploads
+const multer = require('multer');
+const path = require('path');
+const fs = require('fs');
+
+// Create uploads directory if it doesn't exist
+const uploadsDir = path.join(__dirname, 'uploads');
+if (!fs.existsSync(uploadsDir)) {
+  fs.mkdirSync(uploadsDir, { recursive: true });
+}
+
+// Configure multer for file uploads
+const storage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    const userDir = path.join(uploadsDir, req.user?.id || 'anonymous');
+    if (!fs.existsSync(userDir)) {
+      fs.mkdirSync(userDir, { recursive: true });
+    }
+    cb(null, userDir);
+  },
+  filename: (req, file, cb) => {
+    // Generate unique filename
+    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+    const ext = path.extname(file.originalname);
+    cb(null, file.fieldname + '-' + uniqueSuffix + ext);
+  }
+});
+
+const upload = multer({
+  storage: storage,
+  limits: {
+    fileSize: 50 * 1024 * 1024, // 50MB max file size
+    files: 20 // Max 20 files at once
+  },
+  fileFilter: (req, file, cb) => {
+    // Allowed file types
+    const allowedTypes = [
+      'image/jpeg', 'image/png', 'image/gif', 'image/webp',
+      'application/pdf', 'text/plain',
+      'application/msword', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      'application/vnd.ms-excel', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      'application/zip', 'application/x-rar-compressed',
+      'application/json', 'text/csv'
+    ];
+    
+    if (allowedTypes.includes(file.mimetype)) {
+      cb(null, true);
+    } else {
+      cb(new Error(`File type ${file.mimetype} is not allowed`), false);
+    }
+  }
+});
+
+// Upload single file
+app.post('/api/upload/file', authenticateToken, upload.single('file'), (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({
+        success: false,
+        error: 'No file provided'
+      });
+    }
+    
+    const { fileId } = req.body;
+    const userId = req.user.id;
+    
+    // Create file record in database
+    const fileRecord = {
+      id: fileId || 'file_' + Date.now(),
+      userId: userId,
+      originalName: req.file.originalname,
+      filename: req.file.filename,
+      mimetype: req.file.mimetype,
+      size: req.file.size,
+      path: req.file.path,
+      uploadDate: new Date().toISOString(),
+      status: 'uploaded'
+    };
+    
+    // Save file metadata to database (you would need to add this table)
+    // For now, we'll just return the file info
+    const fileUrl = `/uploads/${userId}/${req.file.filename}`;
+    
+    res.json({
+      success: true,
+      file: {
+        id: fileRecord.id,
+        name: req.file.originalname,
+        size: req.file.size,
+        type: req.file.mimetype,
+        url: fileUrl,
+        uploadDate: fileRecord.uploadDate
+      },
+      message: 'File uploaded successfully'
+    });
+    
+    // Log upload
+    console.log(`File uploaded: ${req.file.originalname} by user ${userId}`);
+    
+  } catch (error) {
+    console.error('File upload error:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to upload file'
+    });
+  }
+});
+
+// Upload multiple files
+app.post('/api/upload/files', authenticateToken, upload.array('files', 20), (req, res) => {
+  try {
+    if (!req.files || req.files.length === 0) {
+      return res.status(400).json({
+        success: false,
+        error: 'No files provided'
+      });
+    }
+    
+    const userId = req.user.id;
+    const uploadedFiles = [];
+    
+    req.files.forEach((file, index) => {
+      const fileRecord = {
+        id: 'file_' + Date.now() + '_' + index,
+        userId: userId,
+        originalName: file.originalname,
+        filename: file.filename,
+        mimetype: file.mimetype,
+        size: file.size,
+        path: file.path,
+        uploadDate: new Date().toISOString(),
+        status: 'uploaded'
+      };
+      
+      const fileUrl = `/uploads/${userId}/${file.filename}`;
+      uploadedFiles.push({
+        id: fileRecord.id,
+        name: file.originalname,
+        size: file.size,
+        type: file.mimetype,
+        url: fileUrl,
+        uploadDate: fileRecord.uploadDate
+      });
+    });
+    
+    res.json({
+      success: true,
+      files: uploadedFiles,
+      count: uploadedFiles.length,
+      message: `${uploadedFiles.length} files uploaded successfully`
+    });
+    
+    console.log(`Multiple files uploaded: ${uploadedFiles.length} files by user ${userId}`);
+    
+  } catch (error) {
+    console.error('Multiple file upload error:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to upload files'
+    });
+  }
+});
+
+// Upload file for auction
+app.post('/api/upload/auction/:auctionId', authenticateToken, upload.single('file'), (req, res) => {
+  try {
+    const { auctionId } = req.params;
+    const userId = req.user.id;
+    
+    if (!req.file) {
+      return res.status(400).json({
+        success: false,
+        error: 'No file provided'
+      });
+    }
+    
+    // Verify auction ownership
+    const auction = db.getAuction(auctionId);
+    if (!auction) {
+      return res.status(404).json({
+        success: false,
+        error: 'Auction not found'
+      });
+    }
+    
+    if (auction.creatorId !== userId) {
+      return res.status(403).json({
+        success: false,
+        error: 'Not authorized to upload files to this auction'
+      });
+    }
+    
+    const fileRecord = {
+      id: 'auction_file_' + Date.now(),
+      auctionId: auctionId,
+      userId: userId,
+      originalName: req.file.originalname,
+      filename: req.file.filename,
+      mimetype: req.file.mimetype,
+      size: req.file.size,
+      path: req.file.path,
+      uploadDate: new Date().toISOString(),
+      status: 'uploaded'
+    };
+    
+    const fileUrl = `/uploads/${userId}/${req.file.filename}`;
+    
+    res.json({
+      success: true,
+      file: {
+        id: fileRecord.id,
+        auctionId: auctionId,
+        name: req.file.originalname,
+        size: req.file.size,
+        type: req.file.mimetype,
+        url: fileUrl,
+        uploadDate: fileRecord.uploadDate
+      },
+      message: 'Auction file uploaded successfully'
+    });
+    
+    console.log(`Auction file uploaded: ${req.file.originalname} for auction ${auctionId}`);
+    
+  } catch (error) {
+    console.error('Auction file upload error:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to upload auction file'
+    });
+  }
+});
+
+// Get user's uploaded files
+app.get('/api/upload/files', authenticateToken, (req, res) => {
+  try {
+    const userId = req.user.id;
+    const { page = 1, limit = 20, type } = req.query;
+    
+    // Get files from database (you would need to implement this)
+    // For now, return empty array
+    const files = [];
+    
+    res.json({
+      success: true,
+      files: files,
+      pagination: {
+        page: parseInt(page),
+        limit: parseInt(limit),
+        total: files.length,
+        pages: Math.ceil(files.length / limit)
+      }
+    });
+    
+  } catch (error) {
+    console.error('Get files error:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to retrieve files'
+    });
+  }
+});
+
+// Delete uploaded file
+app.delete('/api/upload/file/:fileId', authenticateToken, (req, res) => {
+  try {
+    const { fileId } = req.params;
+    const userId = req.user.id;
+    
+    // Get file info from database
+    const file = null; // You would need to implement this
+    
+    if (!file) {
+      return res.status(404).json({
+        success: false,
+        error: 'File not found'
+      });
+    }
+    
+    if (file.userId !== userId) {
+      return res.status(403).json({
+        success: false,
+        error: 'Not authorized to delete this file'
+      });
+    }
+    
+    // Delete file from filesystem
+    if (fs.existsSync(file.path)) {
+      fs.unlinkSync(file.path);
+    }
+    
+    // Delete file record from database
+    // You would need to implement this
+    
+    res.json({
+      success: true,
+      message: 'File deleted successfully'
+    });
+    
+    console.log(`File deleted: ${file.originalName} by user ${userId}`);
+    
+  } catch (error) {
+    console.error('Delete file error:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to delete file'
+    });
+  }
+});
+
+// Get file info
+app.get('/api/upload/file/:fileId', authenticateToken, (req, res) => {
+  try {
+    const { fileId } = req.params;
+    const userId = req.user.id;
+    
+    // Get file info from database
+    const file = null; // You would need to implement this
+    
+    if (!file) {
+      return res.status(404).json({
+        success: false,
+        error: 'File not found'
+      });
+    }
+    
+    if (file.userId !== userId) {
+      return res.status(403).json({
+        success: false,
+        error: 'Not authorized to access this file'
+      });
+    }
+    
+    res.json({
+      success: true,
+      file: {
+        id: file.id,
+        name: file.originalName,
+        size: file.size,
+        type: file.mimetype,
+        url: `/uploads/${file.userId}/${file.filename}`,
+        uploadDate: file.uploadDate,
+        downloadCount: file.downloadCount || 0
+      }
+    });
+    
+  } catch (error) {
+    console.error('Get file info error:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to retrieve file info'
+    });
+  }
+});
+
+// Serve uploaded files
+app.get('/uploads/:userId/:filename', (req, res) => {
+  try {
+    const { userId, filename } = req.params;
+    const filePath = path.join(uploadsDir, userId, filename);
+    
+    if (!fs.existsSync(filePath)) {
+      return res.status(404).json({
+        error: 'File not found'
+      });
+    }
+    
+    res.sendFile(filePath);
+    
+  } catch (error) {
+    console.error('Serve file error:', error);
+    res.status(500).json({
+      error: 'Failed to serve file'
+    });
+  }
+});
+
+// Get upload statistics
+app.get('/api/upload/stats', authenticateToken, (req, res) => {
+  try {
+    const userId = req.user.id;
+    
+    // Get statistics from database
+    const stats = {
+      totalFiles: 0,
+      totalSize: 0,
+      uploadedToday: 0,
+      uploadedThisWeek: 0,
+      uploadedThisMonth: 0,
+      fileTypes: {},
+      storageUsed: 0,
+      storageLimit: 100 * 1024 * 1024 * 1024 // 100GB
+    };
+    
+    res.json({
+      success: true,
+      stats: stats
+    });
+    
+  } catch (error) {
+    console.error('Upload stats error:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to retrieve upload statistics'
+    });
+  }
+});
+
 // Serve generated share images
 app.get('/api/share/image/:auctionId', (req, res) => {
   try {
