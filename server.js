@@ -630,6 +630,7 @@ app.post('/api/auctions',
     };
     
     io.emit('auctionCreated', auction);
+    io.to('dashboard').emit('auction_update', { type: 'auction', data: auction });
     res.status(201).sendData(responseData, 'auctionCreated');
   } catch (error) {
     logError('Auction creation failed:', error, { endpoint: '/api/auctions', method: 'POST' });
@@ -730,6 +731,16 @@ app.post('/api/auctions/:id/bids',
     }
     
     io.emit('bidPlaced', { auctionId, bidCount: auction ? auction.bids.length : 1 });
+    
+    // Send detailed bid data to dashboard
+    const bidData = {
+      id: bidId,
+      auction_id: auctionId,
+      amount: amount,
+      timestamp: new Date().toISOString(),
+      bidder_id: req.user?.id || 'anonymous'
+    };
+    io.to('dashboard').emit('bid_update', { type: 'bid', data: bidData });
     res.status(201).sendData({ 
       message: 'Bid placed successfully', 
       bidId,
@@ -806,6 +817,7 @@ app.patch('/api/auctions/:id',
       }
     };
     io.emit('auctionClosed', responseData);
+    io.to('dashboard').emit('auction_update', { type: 'auction', data: responseData });
     res.sendData(responseData, 'auctionClosed');
   } catch (error) {
     logError('Error closing auction:', error, { endpoint: '/api/auctions/:id', method: 'PATCH' });
@@ -1503,6 +1515,46 @@ app.post('/api/share/generate-image', async (req, res) => {
   }
 });
 
+// Dashboard analytics endpoint
+app.get('/api/dashboard/data', (req, res) => {
+  try {
+    const auctions = db.getAllAuctions();
+    const bids = [];
+    
+    // Collect all bids from all auctions
+    auctions.forEach(auction => {
+      const auctionBids = db.getBidsForAuction(auction.id);
+      bids.push(...auctionBids);
+    });
+    
+    // Get revenue data
+    const revenue = [];
+    try {
+      // Simulate revenue data from database (you may need to add this method to database.js)
+      const stmt = db.db.prepare('SELECT * FROM revenue_tracking ORDER BY created_at DESC');
+      const revenueData = stmt.all();
+      revenue.push(...revenueData);
+    } catch (error) {
+      console.warn('Revenue tracking table not found or empty:', error.message);
+    }
+    
+    res.json({
+      success: true,
+      data: {
+        auctions,
+        bids,
+        revenue
+      }
+    });
+  } catch (error) {
+    console.error('Error fetching dashboard data:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to fetch dashboard data'
+    });
+  }
+});
+
 // Serve generated share images
 app.get('/api/share/image/:auctionId', (req, res) => {
   try {
@@ -1548,12 +1600,22 @@ app.get('/api/share/image/:auctionId', (req, res) => {
   }
 });
 
+// Dashboard route
+app.get('/dashboard', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'dashboard.html'));
+});
+
 // Socket.io connections
 io.on('connection', (socket) => {
   console.log('User connected:', socket.id);
   
   socket.on('joinAuction', (auctionId) => {
     socket.join(auctionId);
+  });
+  
+  socket.on('joinDashboard', () => {
+    socket.join('dashboard');
+    console.log('User joined dashboard room:', socket.id);
   });
   
   socket.on('disconnect', () => {
@@ -1583,6 +1645,10 @@ setInterval(() => {
       db.closeAuction(auction.id, winnerId, winningBidId);
       
       io.emit('auctionClosed', { ...auction, status: 'closed', winner: winnerId, winningBid: winningBidId });
+      io.to('dashboard').emit('auction_update', { 
+        type: 'auction', 
+        data: { ...auction, status: 'closed', winner: winnerId, winningBid: winningBidId } 
+      });
     }
   }
 }, 60000); // Check every minute
