@@ -217,6 +217,120 @@ class AuctionDatabase {
       CREATE INDEX IF NOT EXISTS idx_share_engagement_share_id ON share_engagement(share_id);
       CREATE INDEX IF NOT EXISTS idx_share_engagement_type ON share_engagement(engagement_type);
     `);
+
+    // Token management tables
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS tokens (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        symbol TEXT NOT NULL,
+        description TEXT,
+        total_supply REAL NOT NULL DEFAULT 0,
+        circulating_supply REAL DEFAULT 0,
+        creator_id TEXT NOT NULL,
+        contract_address TEXT,
+        asset_code TEXT,
+        asset_issuer TEXT,
+        decimals INTEGER DEFAULT 7,
+        status TEXT DEFAULT 'active' CHECK(status IN ('active', 'inactive', 'suspended')),
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (creator_id) REFERENCES users(id)
+      )
+    `);
+
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS token_balances (
+        id TEXT PRIMARY KEY,
+        token_id TEXT NOT NULL,
+        user_id TEXT NOT NULL,
+        balance REAL NOT NULL DEFAULT 0,
+        frozen_balance REAL DEFAULT 0,
+        last_updated DATETIME DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(token_id, user_id),
+        FOREIGN KEY (token_id) REFERENCES tokens(id) ON DELETE CASCADE,
+        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+      )
+    `);
+
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS token_transfers (
+        id TEXT PRIMARY KEY,
+        token_id TEXT NOT NULL,
+        from_user_id TEXT,
+        to_user_id TEXT NOT NULL,
+        amount REAL NOT NULL,
+        transaction_hash TEXT,
+        stellar_transaction_id TEXT,
+        status TEXT DEFAULT 'pending' CHECK(status IN ('pending', 'completed', 'failed', 'cancelled')),
+        gas_fee REAL DEFAULT 0,
+        memo TEXT,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        completed_at DATETIME,
+        FOREIGN KEY (token_id) REFERENCES tokens(id),
+        FOREIGN KEY (from_user_id) REFERENCES users(id),
+        FOREIGN KEY (to_user_id) REFERENCES users(id)
+      )
+    `);
+
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS token_approvals (
+        id TEXT PRIMARY KEY,
+        token_id TEXT NOT NULL,
+        owner_id TEXT NOT NULL,
+        spender_id TEXT NOT NULL,
+        allowance REAL NOT NULL DEFAULT 0,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        last_used DATETIME,
+        expires_at DATETIME,
+        status TEXT DEFAULT 'active' CHECK(status IN ('active', 'revoked', 'expired')),
+        UNIQUE(token_id, owner_id, spender_id),
+        FOREIGN KEY (token_id) REFERENCES tokens(id) ON DELETE CASCADE,
+        FOREIGN KEY (owner_id) REFERENCES users(id) ON DELETE CASCADE,
+        FOREIGN KEY (spender_id) REFERENCES users(id) ON DELETE CASCADE
+      )
+    `);
+
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS token_history (
+        id TEXT PRIMARY KEY,
+        token_id TEXT NOT NULL,
+        user_id TEXT NOT NULL,
+        action_type TEXT NOT NULL CHECK(action_type IN ('created', 'minted', 'burned', 'transferred', 'approved', 'received', 'frozen', 'unfrozen')),
+        amount REAL DEFAULT 0,
+        from_user_id TEXT,
+        to_user_id TEXT,
+        transaction_hash TEXT,
+        details TEXT,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (token_id) REFERENCES tokens(id) ON DELETE CASCADE,
+        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+        FOREIGN KEY (from_user_id) REFERENCES users(id),
+        FOREIGN KEY (to_user_id) REFERENCES users(id)
+      )
+    `);
+
+    // Token management indexes
+    this.db.exec(`
+      CREATE INDEX IF NOT EXISTS idx_tokens_creator_id ON tokens(creator_id);
+      CREATE INDEX IF NOT EXISTS idx_tokens_symbol ON tokens(symbol);
+      CREATE INDEX IF NOT EXISTS idx_tokens_status ON tokens(status);
+      CREATE INDEX IF NOT EXISTS idx_token_balances_token_id ON token_balances(token_id);
+      CREATE INDEX IF NOT EXISTS idx_token_balances_user_id ON token_balances(user_id);
+      CREATE INDEX IF NOT EXISTS idx_token_transfers_token_id ON token_transfers(token_id);
+      CREATE INDEX IF NOT EXISTS idx_token_transfers_from_user_id ON token_transfers(from_user_id);
+      CREATE INDEX IF NOT EXISTS idx_token_transfers_to_user_id ON token_transfers(to_user_id);
+      CREATE INDEX IF NOT EXISTS idx_token_transfers_status ON token_transfers(status);
+      CREATE INDEX IF NOT EXISTS idx_token_transfers_created_at ON token_transfers(created_at);
+      CREATE INDEX IF NOT EXISTS idx_token_approvals_token_id ON token_approvals(token_id);
+      CREATE INDEX IF NOT EXISTS idx_token_approvals_owner_id ON token_approvals(owner_id);
+      CREATE INDEX IF NOT EXISTS idx_token_approvals_spender_id ON token_approvals(spender_id);
+      CREATE INDEX IF NOT EXISTS idx_token_approvals_status ON token_approvals(status);
+      CREATE INDEX IF NOT EXISTS idx_token_history_token_id ON token_history(token_id);
+      CREATE INDEX IF NOT EXISTS idx_token_history_user_id ON token_history(user_id);
+      CREATE INDEX IF NOT EXISTS idx_token_history_action_type ON token_history(action_type);
+      CREATE INDEX IF NOT EXISTS idx_token_history_created_at ON token_history(created_at);
+    `);
   }
 
   // User operations
@@ -1631,6 +1745,379 @@ class AuctionDatabase {
     });
 
     return { auctions, bids, users };
+  }
+
+  // Token Management Methods
+  
+  createToken(id, name, symbol, description, totalSupply, creatorId, assetCode = null, assetIssuer = null, decimals = 7) {
+    const validation = this.securityLayer.validateInputs({ id, name, symbol, description, totalSupply, creatorId });
+    if (!validation.valid) {
+      throw new Error(validation.errors.join(', '));
+    }
+
+    const stmt = this.securityLayer.prepare(`
+      INSERT INTO tokens (id, name, symbol, description, total_supply, circulating_supply, creator_id, asset_code, asset_issuer, decimals)
+      VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?, ?)
+    `);
+    
+    const result = stmt.run(id, name, symbol, description, totalSupply, creatorId, assetCode, assetIssuer, decimals);
+    
+    // Initialize creator's balance
+    this.initializeTokenBalance(id, creatorId);
+    
+    // Record token creation in history
+    this.recordTokenHistory(id, creatorId, 'created', totalSupply, null, creatorId, null, `Token ${name} created`);
+    
+    return result;
+  }
+
+  getToken(tokenId) {
+    const validation = this.securityLayer.validateInput(tokenId);
+    if (!validation.valid) {
+      console.warn('[SECURITY] Invalid token ID format:', tokenId);
+      return null;
+    }
+    
+    const stmt = this.securityLayer.prepare('SELECT * FROM tokens WHERE id = ?');
+    return stmt.get(validation.sanitized);
+  }
+
+  getTokenBySymbol(symbol) {
+    const validation = this.securityLayer.validateInput(symbol);
+    if (!validation.valid) {
+      console.warn('[SECURITY] Invalid token symbol format:', symbol);
+      return null;
+    }
+    
+    const stmt = this.securityLayer.prepare('SELECT * FROM tokens WHERE symbol = ?');
+    return stmt.get(validation.sanitized);
+  }
+
+  getAllTokens(userId = null, status = 'active') {
+    let query = 'SELECT t.*, u.username as creator_name FROM tokens t LEFT JOIN users u ON t.creator_id = u.id';
+    const params = [];
+    
+    if (userId) {
+      query += ' WHERE t.creator_id = ?';
+      params.push(userId);
+    }
+    
+    if (status) {
+      query += userId ? ' AND t.status = ?' : ' WHERE t.status = ?';
+      params.push(status);
+    }
+    
+    query += ' ORDER BY t.created_at DESC';
+    
+    const stmt = this.securityLayer.prepare(query);
+    return stmt.all(...params);
+  }
+
+  updateTokenStatus(tokenId, status) {
+    const validation = this.securityLayer.validateInput(tokenId);
+    if (!validation.valid) {
+      throw new Error('Invalid token ID format');
+    }
+    
+    const stmt = this.securityLayer.prepare(`
+      UPDATE tokens SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?
+    `);
+    
+    const result = stmt.run(status, validation.sanitized);
+    return result.changes > 0;
+  }
+
+  // Token Balance Management
+  
+  initializeTokenBalance(tokenId, userId) {
+    const validation = this.securityLayer.validateInputs({ tokenId, userId });
+    if (!validation.valid) {
+      throw new Error(validation.errors.join(', '));
+    }
+    
+    const stmt = this.securityLayer.prepare(`
+      INSERT OR IGNORE INTO token_balances (id, token_id, user_id, balance)
+      VALUES (?, ?, ?, 0)
+    `);
+    
+    return stmt.run(`${tokenId}_${userId}`, validation.sanitized.tokenId, validation.sanitized.userId);
+  }
+
+  getTokenBalance(tokenId, userId) {
+    const validation = this.securityLayer.validateInputs({ tokenId, userId });
+    if (!validation.valid) {
+      console.warn('[SECURITY] Invalid input format for token balance');
+      return null;
+    }
+    
+    const stmt = this.securityLayer.prepare(`
+      SELECT * FROM token_balances WHERE token_id = ? AND user_id = ?
+    `);
+    
+    return stmt.get(validation.sanitized.tokenId, validation.sanitized.userId);
+  }
+
+  updateTokenBalance(tokenId, userId, amount, isMint = false) {
+    const validation = this.securityLayer.validateInputs({ tokenId, userId, amount });
+    if (!validation.valid) {
+      throw new Error(validation.errors.join(', '));
+    }
+    
+    // Initialize balance if not exists
+    this.initializeTokenBalance(tokenId, userId);
+    
+    const stmt = this.securityLayer.prepare(`
+      UPDATE token_balances 
+      SET balance = balance + ?, last_updated = CURRENT_TIMESTAMP
+      WHERE token_id = ? AND user_id = ?
+    `);
+    
+    const result = stmt.run(amount, validation.sanitized.tokenId, validation.sanitized.userId);
+    
+    // Update circulating supply for minting
+    if (isMint && amount > 0) {
+      this.updateCirculatingSupply(tokenId, amount);
+    }
+    
+    return result.changes > 0;
+  }
+
+  updateCirculatingSupply(tokenId, amount) {
+    const validation = this.securityLayer.validateInput(tokenId);
+    if (!validation.valid) {
+      throw new Error('Invalid token ID format');
+    }
+    
+    const stmt = this.securityLayer.prepare(`
+      UPDATE tokens SET circulating_supply = circulating_supply + ? WHERE id = ?
+    `);
+    
+    return stmt.run(amount, validation.sanitized);
+  }
+
+  // Token Transfer Management
+  
+  createTokenTransfer(tokenId, fromUserId, toUserId, amount, memo = null) {
+    const validation = this.securityLayer.validateInputs({ tokenId, fromUserId, toUserId, amount, memo });
+    if (!validation.valid) {
+      throw new Error(validation.errors.join(', '));
+    }
+    
+    const transferId = uuidv4();
+    const stmt = this.securityLayer.prepare(`
+      INSERT INTO token_transfers (id, token_id, from_user_id, to_user_id, amount, memo)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `);
+    
+    return stmt.run(transferId, validation.sanitized.tokenId, validation.sanitized.fromUserId, 
+                   validation.sanitized.toUserId, validation.sanitized.amount, validation.sanitized.memo);
+  }
+
+  updateTokenTransferStatus(transferId, status, transactionHash = null, gasFee = 0) {
+    const validation = this.securityLayer.validateInputs({ transferId, status, transactionHash, gasFee });
+    if (!validation.valid) {
+      throw new Error(validation.errors.join(', '));
+    }
+    
+    const stmt = this.securityLayer.prepare(`
+      UPDATE token_transfers 
+      SET status = ?, transaction_hash = ?, gas_fee = ?, completed_at = CASE WHEN ? = 'completed' THEN CURRENT_TIMESTAMP ELSE completed_at END
+      WHERE id = ?
+    `);
+    
+    return stmt.run(validation.sanitized.status, validation.sanitized.transactionHash, 
+                    validation.sanitized.gasFee, validation.sanitized.status, validation.sanitized.transferId);
+  }
+
+  getTokenTransfers(tokenId, userId = null, status = null, limit = 50, offset = 0) {
+    let query = `
+      SELECT tt.*, 
+             u1.username as from_username, 
+             u2.username as to_username
+      FROM token_transfers tt
+      LEFT JOIN users u1 ON tt.from_user_id = u1.id
+      LEFT JOIN users u2 ON tt.to_user_id = u2.id
+      WHERE tt.token_id = ?
+    `;
+    const params = [tokenId];
+    
+    if (userId) {
+      query += ' AND (tt.from_user_id = ? OR tt.to_user_id = ?)';
+      params.push(userId, userId);
+    }
+    
+    if (status) {
+      query += ' AND tt.status = ?';
+      params.push(status);
+    }
+    
+    query += ' ORDER BY tt.created_at DESC LIMIT ? OFFSET ?';
+    params.push(limit, offset);
+    
+    const stmt = this.securityLayer.prepare(query);
+    return stmt.all(...params);
+  }
+
+  // Token Approval Management
+  
+  createTokenApproval(tokenId, ownerId, spenderId, allowance, expiresAt = null) {
+    const validation = this.securityLayer.validateInputs({ tokenId, ownerId, spenderId, allowance, expiresAt });
+    if (!validation.valid) {
+      throw new Error(validation.errors.join(', '));
+    }
+    
+    const approvalId = uuidv4();
+    const stmt = this.securityLayer.prepare(`
+      INSERT OR REPLACE INTO token_approvals (id, token_id, owner_id, spender_id, allowance, expires_at)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `);
+    
+    return stmt.run(approvalId, validation.sanitized.tokenId, validation.sanitized.ownerId, 
+                   validation.sanitized.spenderId, validation.sanitized.allowance, validation.sanitized.expiresAt);
+  }
+
+  getTokenApproval(tokenId, ownerId, spenderId) {
+    const validation = this.securityLayer.validateInputs({ tokenId, ownerId, spenderId });
+    if (!validation.valid) {
+      console.warn('[SECURITY] Invalid input format for token approval');
+      return null;
+    }
+    
+    const stmt = this.securityLayer.prepare(`
+      SELECT * FROM token_approvals 
+      WHERE token_id = ? AND owner_id = ? AND spender_id = ? AND status = 'active'
+    `);
+    
+    return stmt.get(validation.sanitized.tokenId, validation.sanitized.ownerId, validation.sanitized.spenderId);
+  }
+
+  updateTokenApproval(tokenId, ownerId, spenderId, allowance) {
+    const validation = this.securityLayer.validateInputs({ tokenId, ownerId, spenderId, allowance });
+    if (!validation.valid) {
+      throw new Error(validation.errors.join(', '));
+    }
+    
+    const stmt = this.securityLayer.prepare(`
+      UPDATE token_approvals 
+      SET allowance = ?, last_used = CURRENT_TIMESTAMP
+      WHERE token_id = ? AND owner_id = ? AND spender_id = ? AND status = 'active'
+    `);
+    
+    return stmt.run(validation.sanitized.allowance, validation.sanitized.tokenId, 
+                   validation.sanitized.ownerId, validation.sanitized.spenderId);
+  }
+
+  revokeTokenApproval(tokenId, ownerId, spenderId) {
+    const validation = this.securityLayer.validateInputs({ tokenId, ownerId, spenderId });
+    if (!validation.valid) {
+      throw new Error(validation.errors.join(', '));
+    }
+    
+    const stmt = this.securityLayer.prepare(`
+      UPDATE token_approvals SET status = 'revoked' 
+      WHERE token_id = ? AND owner_id = ? AND spender_id = ? AND status = 'active'
+    `);
+    
+    return stmt.run(validation.sanitized.tokenId, validation.sanitized.ownerId, validation.sanitized.spenderId);
+  }
+
+  // Token History Management
+  
+  recordTokenHistory(tokenId, userId, actionType, amount = 0, fromUserId = null, toUserId = null, transactionHash = null, details = null) {
+    const validation = this.securityLayer.validateInputs({ 
+      tokenId, userId, actionType, amount, fromUserId, toUserId, transactionHash, details 
+    });
+    if (!validation.valid) {
+      throw new Error(validation.errors.join(', '));
+    }
+    
+    const historyId = uuidv4();
+    const stmt = this.securityLayer.prepare(`
+      INSERT INTO token_history (id, token_id, user_id, action_type, amount, from_user_id, to_user_id, transaction_hash, details)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    
+    return stmt.run(historyId, validation.sanitized.tokenId, validation.sanitized.userId, 
+                   validation.sanitized.actionType, validation.sanitized.amount, validation.sanitized.fromUserId,
+                   validation.sanitized.toUserId, validation.sanitized.transactionHash, validation.sanitized.details);
+  }
+
+  getTokenHistory(tokenId, userId = null, actionType = null, limit = 100, offset = 0) {
+    let query = `
+      SELECT th.*, u.username as user_name,
+             u1.username as from_username, 
+             u2.username as to_username
+      FROM token_history th
+      LEFT JOIN users u ON th.user_id = u.id
+      LEFT JOIN users u1 ON th.from_user_id = u1.id
+      LEFT JOIN users u2 ON th.to_user_id = u2.id
+      WHERE th.token_id = ?
+    `;
+    const params = [tokenId];
+    
+    if (userId) {
+      query += ' AND th.user_id = ?';
+      params.push(userId);
+    }
+    
+    if (actionType) {
+      query += ' AND th.action_type = ?';
+      params.push(actionType);
+    }
+    
+    query += ' ORDER BY th.created_at DESC LIMIT ? OFFSET ?';
+    params.push(limit, offset);
+    
+    const stmt = this.securityLayer.prepare(query);
+    return stmt.all(...params);
+  }
+
+  // Token Statistics
+  
+  getTokenStats(tokenId) {
+    const validation = this.securityLayer.validateInput(tokenId);
+    if (!validation.valid) {
+      throw new Error('Invalid token ID format');
+    }
+    
+    const stmt = this.securityLayer.prepare(`
+      SELECT 
+        t.*,
+        COUNT(DISTINCT tb.user_id) as holder_count,
+        SUM(tb.balance) as total_held_balance,
+        COUNT(tt.id) as total_transfers,
+        COUNT(CASE WHEN tt.status = 'completed' THEN 1 END) as completed_transfers,
+        COUNT(ta.id) as active_approvals
+      FROM tokens t
+      LEFT JOIN token_balances tb ON t.id = tb.token_id AND tb.balance > 0
+      LEFT JOIN token_transfers tt ON t.id = tt.token_id
+      LEFT JOIN token_approvals ta ON t.id = ta.token_id AND ta.status = 'active'
+      WHERE t.id = ?
+      GROUP BY t.id
+    `);
+    
+    return stmt.get(validation.sanitized);
+  }
+
+  getUserTokenPortfolio(userId) {
+    const validation = this.securityLayer.validateInput(userId);
+    if (!validation.valid) {
+      throw new Error('Invalid user ID format');
+    }
+    
+    const stmt = this.securityLayer.prepare(`
+      SELECT 
+        t.id, t.name, t.symbol, t.description, t.decimals,
+        tb.balance, tb.frozen_balance,
+        t.total_supply, t.circulating_supply,
+        (tb.balance / t.total_supply * 100) as ownership_percentage
+      FROM token_balances tb
+      JOIN tokens t ON tb.token_id = t.id
+      WHERE tb.user_id = ? AND tb.balance > 0 AND t.status = 'active'
+      ORDER BY tb.balance DESC
+    `);
+    
+    return stmt.all(validation.sanitized);
   }
 }
 
