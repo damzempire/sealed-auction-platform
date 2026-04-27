@@ -26,6 +26,7 @@ const AuctionDatabase = require('./database');
 const { ApplicationMetrics, createMetricsMiddleware } = require('./utils/metrics');
 const NetworkMonitor = require('./utils/network-monitor');
 const { TransactionQueue, PRIORITY, STATUS } = require('./utils/transaction-queue');
+const { WalletManager, SECURITY_LEVELS, WALLET_TYPES } = require('./utils/wallet-manager');
 
 // Initialize database
 const db = new AuctionDatabase();
@@ -41,6 +42,15 @@ const transactionQueue = new TransactionQueue({
   batchTimeout: 5000,
   maxRetries: 3,
   gasOptimization: true
+});
+
+// Initialize wallet manager
+const walletManager = new WalletManager({
+  maxWallets: 50,
+  defaultSecurityLevel: SECURITY_LEVELS.STANDARD,
+  autoLockTimeout: 300000,
+  autoBackup: true,
+  backupInterval: 86400000
 });
 
 const app = express();
@@ -3208,6 +3218,509 @@ io.on('connection', (socket) => {
   
   socket.on('disconnect', () => {
     console.log('Client disconnected from transaction queue updates');
+  });
+});
+
+// ==================== WALLET MANAGEMENT API ENDPOINTS ====================
+
+// Get wallet manager status
+app.get('/api/wallets/status', authenticateToken, (req, res) => {
+  try {
+    const status = walletManager.getStatus();
+    res.json(status);
+  } catch (error) {
+    logError('Error fetching wallet manager status:', error, { endpoint: '/api/wallets/status', userId: req.user?.id });
+    res.status(500).json({ error: 'Failed to fetch wallet manager status' });
+  }
+});
+
+// Get all wallets for user
+app.get('/api/wallets', authenticateToken, (req, res) => {
+  try {
+    const wallets = walletManager.getAllWallets();
+    // Filter wallets by user if needed (in a real implementation, wallets would be user-specific)
+    res.json({
+      wallets,
+      count: wallets.length
+    });
+  } catch (error) {
+    logError('Error fetching wallets:', error, { endpoint: '/api/wallets', userId: req.user?.id });
+    res.status(500).json({ error: 'Failed to fetch wallets' });
+  }
+});
+
+// Get specific wallet details
+app.get('/api/wallets/:walletId', authenticateToken, (req, res) => {
+  try {
+    const { walletId } = req.params;
+    const wallet = walletManager.getWallet(walletId);
+    
+    if (!wallet) {
+      return res.status(404).json({ error: 'Wallet not found' });
+    }
+    
+    // Remove sensitive data for security
+    const safeWallet = { ...wallet };
+    delete safeWallet.encryptedSecretKey;
+    delete safeWallet.encryptedPrivateKey;
+    delete safeWallet.customData;
+    
+    res.json(safeWallet);
+  } catch (error) {
+    logError('Error fetching wallet:', error, { endpoint: '/api/wallets/:walletId', userId: req.user?.id });
+    res.status(500).json({ error: 'Failed to fetch wallet' });
+  }
+});
+
+// Create new wallet
+app.post('/api/wallets', authenticateToken, async (req, res) => {
+  try {
+    const walletData = req.body;
+    
+    // Validate required fields
+    if (!walletData.name || !walletData.type) {
+      return res.status(400).json({ error: 'Name and type are required' });
+    }
+    
+    // Add user context
+    walletData.userId = req.user.id;
+    
+    const walletId = await walletManager.createWallet(walletData);
+    
+    res.json({
+      walletId,
+      message: 'Wallet created successfully'
+    });
+  } catch (error) {
+    logError('Error creating wallet:', error, { endpoint: '/api/wallets', userId: req.user?.id });
+    res.status(500).json({ error: error.message || 'Failed to create wallet' });
+  }
+});
+
+// Add existing wallet
+app.post('/api/wallets/import', authenticateToken, async (req, res) => {
+  try {
+    const walletData = req.body;
+    
+    // Validate required fields
+    if (!walletData.name || !walletData.publicKey || !walletData.secretKey) {
+      return res.status(400).json({ error: 'Name, publicKey, and secretKey are required' });
+    }
+    
+    // Add user context
+    walletData.userId = req.user.id;
+    
+    const walletId = await walletManager.addExistingWallet(walletData);
+    
+    res.json({
+      walletId,
+      message: 'Wallet imported successfully'
+    });
+  } catch (error) {
+    logError('Error importing wallet:', error, { endpoint: '/api/wallets/import', userId: req.user?.id });
+    res.status(500).json({ error: error.message || 'Failed to import wallet' });
+  }
+});
+
+// Set active wallet
+app.put('/api/wallets/:walletId/active', authenticateToken, async (req, res) => {
+  try {
+    const { walletId } = req.params;
+    
+    await walletManager.setActiveWallet(walletId);
+    
+    res.json({
+      message: 'Active wallet updated successfully'
+    });
+  } catch (error) {
+    logError('Error setting active wallet:', error, { endpoint: '/api/wallets/:walletId/active', userId: req.user?.id });
+    res.status(500).json({ error: error.message || 'Failed to set active wallet' });
+  }
+});
+
+// Get active wallet
+app.get('/api/wallets/active', authenticateToken, (req, res) => {
+  try {
+    const wallet = walletManager.getActiveWallet();
+    
+    if (!wallet) {
+      return res.status(404).json({ error: 'No active wallet found' });
+    }
+    
+    // Remove sensitive data
+    const safeWallet = { ...wallet };
+    delete safeWallet.encryptedSecretKey;
+    delete safeWallet.encryptedPrivateKey;
+    delete safeWallet.customData;
+    
+    res.json(safeWallet);
+  } catch (error) {
+    logError('Error fetching active wallet:', error, { endpoint: '/api/wallets/active', userId: req.user?.id });
+    res.status(500).json({ error: 'Failed to fetch active wallet' });
+  }
+});
+
+// Update wallet
+app.put('/api/wallets/:walletId', authenticateToken, async (req, res) => {
+  try {
+    const { walletId } = req.params;
+    const updates = req.body;
+    
+    await walletManager.updateWallet(walletId, updates);
+    
+    res.json({
+      message: 'Wallet updated successfully'
+    });
+  } catch (error) {
+    logError('Error updating wallet:', error, { endpoint: '/api/wallets/:walletId', userId: req.user?.id });
+    res.status(500).json({ error: error.message || 'Failed to update wallet' });
+  }
+});
+
+// Delete wallet
+app.delete('/api/wallets/:walletId', authenticateToken, async (req, res) => {
+  try {
+    const { walletId } = req.params;
+    
+    await walletManager.deleteWallet(walletId);
+    
+    res.json({
+      message: 'Wallet deleted successfully'
+    });
+  } catch (error) {
+    logError('Error deleting wallet:', error, { endpoint: '/api/wallets/:walletId', userId: req.user?.id });
+    res.status(500).json({ error: error.message || 'Failed to delete wallet' });
+  }
+});
+
+// Lock wallet
+app.post('/api/wallets/:walletId/lock', authenticateToken, async (req, res) => {
+  try {
+    const { walletId } = req.params;
+    
+    await walletManager.lockWallet(walletId);
+    
+    res.json({
+      message: 'Wallet locked successfully'
+    });
+  } catch (error) {
+    logError('Error locking wallet:', error, { endpoint: '/api/wallets/:walletId/lock', userId: req.user?.id });
+    res.status(500).json({ error: error.message || 'Failed to lock wallet' });
+  }
+});
+
+// Unlock wallet
+app.post('/api/wallets/:walletId/unlock', authenticateToken, async (req, res) => {
+  try {
+    const { walletId } = req.params;
+    const { password } = req.body;
+    
+    if (!password) {
+      return res.status(400).json({ error: 'Password is required' });
+    }
+    
+    await walletManager.unlockWallet(walletId, password);
+    
+    res.json({
+      message: 'Wallet unlocked successfully'
+    });
+  } catch (error) {
+    logError('Error unlocking wallet:', error, { endpoint: '/api/wallets/:walletId/unlock', userId: req.user?.id });
+    res.status(500).json({ error: error.message || 'Failed to unlock wallet' });
+  }
+});
+
+// Get wallet balance
+app.get('/api/wallets/:walletId/balance', authenticateToken, async (req, res) => {
+  try {
+    const { walletId } = req.params;
+    
+    const balance = await walletManager.getWalletBalance(walletId);
+    
+    res.json({
+      walletId,
+      balance,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    logError('Error fetching wallet balance:', error, { endpoint: '/api/wallets/:walletId/balance', userId: req.user?.id });
+    res.status(500).json({ error: error.message || 'Failed to fetch wallet balance' });
+  }
+});
+
+// Get aggregated balance across all wallets
+app.get('/api/wallets/balance/aggregate', authenticateToken, async (req, res) => {
+  try {
+    const aggregatedBalance = await walletManager.getAggregatedBalance();
+    
+    res.json(aggregatedBalance);
+  } catch (error) {
+    logError('Error fetching aggregated balance:', error, { endpoint: '/api/wallets/balance/aggregate', userId: req.user?.id });
+    res.status(500).json({ error: error.message || 'Failed to fetch aggregated balance' });
+  }
+});
+
+// Get wallet transaction history
+app.get('/api/wallets/:walletId/transactions', authenticateToken, async (req, res) => {
+  try {
+    const { walletId } = req.params;
+    const options = {
+      limit: parseInt(req.query.limit) || 50,
+      type: req.query.type,
+      dateFrom: req.query.dateFrom,
+      dateTo: req.query.dateTo,
+      refresh: req.query.refresh !== 'false'
+    };
+    
+    const transactions = await walletManager.getTransactionHistory(walletId, options);
+    
+    res.json({
+      walletId,
+      transactions,
+      count: transactions.length,
+      options
+    });
+  } catch (error) {
+    logError('Error fetching transaction history:', error, { endpoint: '/api/wallets/:walletId/transactions', userId: req.user?.id });
+    res.status(500).json({ error: error.message || 'Failed to fetch transaction history' });
+  }
+});
+
+// Create wallet backup
+app.post('/api/wallets/backup', authenticateToken, async (req, res) => {
+  try {
+    const { walletIds, password, includeSettings } = req.body;
+    
+    const backupId = await walletManager.createBackup(walletIds, { 
+      password,
+      includeSettings: includeSettings !== false 
+    });
+    
+    res.json({
+      backupId,
+      message: 'Backup created successfully'
+    });
+  } catch (error) {
+    logError('Error creating backup:', error, { endpoint: '/api/wallets/backup', userId: req.user?.id });
+    res.status(500).json({ error: error.message || 'Failed to create backup' });
+  }
+});
+
+// Restore from backup
+app.post('/api/wallets/restore', authenticateToken, async (req, res) => {
+  try {
+    const { backupData, password } = req.body;
+    
+    if (!backupData) {
+      return res.status(400).json({ error: 'Backup data is required' });
+    }
+    
+    const restoredWallets = await walletManager.restoreFromBackup(backupData, password);
+    
+    res.json({
+      restoredWallets,
+      count: restoredWallets.length,
+      message: 'Wallets restored successfully'
+    });
+  } catch (error) {
+    logError('Error restoring from backup:', error, { endpoint: '/api/wallets/restore', userId: req.user?.id });
+    res.status(500).json({ error: error.message || 'Failed to restore from backup' });
+  }
+});
+
+// Export wallet
+app.get('/api/wallets/:walletId/export', authenticateToken, async (req, res) => {
+  try {
+    const { walletId } = req.params;
+    const { format, password } = req.query;
+    
+    const exportData = await walletManager.exportWallet(walletId, format || 'json', password);
+    
+    // Set appropriate headers
+    if (format === 'csv') {
+      res.setHeader('Content-Type', 'text/csv');
+      res.setHeader('Content-Disposition', `attachment; filename="wallet-${walletId}.csv"`);
+    } else {
+      res.setHeader('Content-Type', 'application/json');
+      res.setHeader('Content-Disposition', `attachment; filename="wallet-${walletId}.json"`);
+    }
+    
+    res.send(exportData);
+  } catch (error) {
+    logError('Error exporting wallet:', error, { endpoint: '/api/wallets/:walletId/export', userId: req.user?.id });
+    res.status(500).json({ error: error.message || 'Failed to export wallet' });
+  }
+});
+
+// Get supported wallet types and security levels
+app.get('/api/wallets/supported', (req, res) => {
+  try {
+    res.json({
+      types: Object.values(WALLET_TYPES),
+      securityLevels: Object.values(SECURITY_LEVELS),
+      networks: {
+        [WALLET_TYPES.STELLAR]: ['mainnet', 'testnet'],
+        [WALLET_TYPES.ETHEREUM]: ['mainnet', 'goerli', 'sepolia'],
+        [WALLET_TYPES.BITCOIN]: ['mainnet', 'testnet']
+      }
+    });
+  } catch (error) {
+    logError('Error fetching supported wallet info:', error, { endpoint: '/api/wallets/supported' });
+    res.status(500).json({ error: 'Failed to fetch supported wallet info' });
+  }
+});
+
+// Mobile-specific endpoints
+
+// Get mobile wallet status (simplified)
+app.get('/api/wallets/mobile/status', authenticateToken, (req, res) => {
+  try {
+    const status = walletManager.getStatus();
+    const mobileStatus = {
+      walletCount: status.walletCount,
+      activeWalletName: status.activeWalletName,
+      hasLockedWallets: walletManager.getAllWallets().some(w => w.isLocked),
+      lastBackup: status.lastBackup,
+      autoBackupEnabled: status.autoBackupEnabled
+    };
+    
+    res.json(mobileStatus);
+  } catch (error) {
+    logError('Error fetching mobile wallet status:', error, { endpoint: '/api/wallets/mobile/status', userId: req.user?.id });
+    res.status(500).json({ error: 'Failed to fetch mobile wallet status' });
+  }
+});
+
+// Quick balance check for mobile
+app.get('/api/wallets/mobile/balances', authenticateToken, async (req, res) => {
+  try {
+    const wallets = walletManager.getAllWallets();
+    const balances = await Promise.all(
+      wallets.map(async (wallet) => {
+        const balance = await walletManager.getWalletBalance(wallet.id);
+        return {
+          id: wallet.id,
+          name: wallet.name,
+          type: wallet.type,
+          balance,
+          isActive: wallet.isActive,
+          isLocked: wallet.isLocked
+        };
+      })
+    );
+    
+    res.json({
+      balances,
+      total: balances.reduce((sum, w) => sum + w.balance, 0)
+    });
+  } catch (error) {
+    logError('Error fetching mobile balances:', error, { endpoint: '/api/wallets/mobile/balances', userId: req.user?.id });
+    res.status(500).json({ error: 'Failed to fetch mobile balances' });
+  }
+});
+
+// Admin endpoints
+
+// Get all wallets (admin only)
+app.get('/api/admin/wallets', authenticateAdmin, (req, res) => {
+  try {
+    const { userId, type, network } = req.query;
+    let wallets = walletManager.getAllWallets();
+    
+    // Apply filters
+    if (userId) {
+      wallets = wallets.filter(w => w.userId === userId);
+    }
+    if (type) {
+      wallets = wallets.filter(w => w.type === type);
+    }
+    if (network) {
+      wallets = wallets.filter(w => w.network === network);
+    }
+    
+    res.json({
+      wallets,
+      count: wallets.length
+    });
+  } catch (error) {
+    logError('Error fetching admin wallets:', error, { endpoint: '/api/admin/wallets' });
+    res.status(500).json({ error: 'Failed to fetch admin wallets' });
+  }
+});
+
+// Get wallet manager configuration (admin only)
+app.get('/api/admin/wallets/config', authenticateAdmin, (req, res) => {
+  try {
+    const config = {
+      maxWallets: walletManager.maxWallets,
+      defaultSecurityLevel: walletManager.defaultSecurityLevel,
+      securitySettings: walletManager.securitySettings,
+      backupSettings: walletManager.backupSettings
+    };
+    
+    res.json(config);
+  } catch (error) {
+    logError('Error fetching wallet manager config:', error, { endpoint: '/api/admin/wallets/config' });
+    res.status(500).json({ error: 'Failed to fetch wallet manager config' });
+  }
+});
+
+// Update wallet manager configuration (admin only)
+app.put('/api/admin/wallets/config', authenticateAdmin, (req, res) => {
+  try {
+    const { maxWallets, defaultSecurityLevel, securitySettings, backupSettings } = req.body;
+    
+    // Update configuration
+    if (maxWallets !== undefined) walletManager.maxWallets = maxWallets;
+    if (defaultSecurityLevel !== undefined) walletManager.defaultSecurityLevel = defaultSecurityLevel;
+    if (securitySettings) walletManager.securitySettings = { ...walletManager.securitySettings, ...securitySettings };
+    if (backupSettings) walletManager.backupSettings = { ...walletManager.backupSettings, ...backupSettings };
+    
+    res.json({
+      message: 'Wallet manager configuration updated successfully'
+    });
+  } catch (error) {
+    logError('Error updating wallet manager config:', error, { endpoint: '/api/admin/wallets/config' });
+    res.status(500).json({ error: 'Failed to update wallet manager config' });
+  }
+});
+
+// WebSocket integration for real-time wallet updates
+io.on('connection', (socket) => {
+  console.log('Client connected to wallet management updates');
+  
+  // Join user-specific room for their wallets
+  socket.on('joinUserWallets', (userId) => {
+    socket.join(`user_${userId}`);
+  });
+  
+  // Listen for wallet manager events
+  walletManager.on('walletCreated', (data) => {
+    io.to(`user_${data.wallet.userId}`).emit('walletCreated', data);
+  });
+  
+  walletManager.on('walletSwitched', (data) => {
+    io.to(`user_${data.wallet.userId}`).emit('walletSwitched', data);
+  });
+  
+  walletManager.on('walletLocked', (data) => {
+    io.to(`user_${data.wallet.userId}`).emit('walletLocked', data);
+  });
+  
+  walletManager.on('walletUnlocked', (data) => {
+    io.to(`user_${data.wallet.userId}`).emit('walletUnlocked', data);
+  });
+  
+  walletManager.on('balanceUpdated', (data) => {
+    io.to(`user_${data.wallet.userId}`).emit('balanceUpdated', data);
+  });
+  
+  walletManager.on('backupCreated', (data) => {
+    io.to(`user_${data.wallet.userId}`).emit('backupCreated', data);
+  });
+  
+  socket.on('disconnect', () => {
+    console.log('Client disconnected from wallet management updates');
   });
 });
 
