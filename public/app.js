@@ -52,6 +52,7 @@ function initializeApp() {
         currentUser = JSON.parse(storedUser);
         hideAuthModal();
         updateUserDisplay();
+        checkAdminAccess();
     }
     
     // Load notifications from localStorage
@@ -149,6 +150,7 @@ function handleAuth(e) {
         localStorage.setItem("currentUser", JSON.stringify(currentUser));
         hideAuthModal();
         updateUserDisplay();
+        checkAdminAccess();
         showNotification(`Successfully ${isLogin ? "logged in" : "registered"}!`, "success");
         loadAuctions(true);
     })
@@ -326,6 +328,9 @@ function createAuctionCard(auction) {
                 ` : ""}
                 <button onclick="viewAuctionDetails('${auction.id}')" class="flex-1 bg-gray-500 hover:bg-gray-600 text-white px-3 py-2 rounded-lg text-sm transition-colors">
                     <i class="fas fa-eye mr-1"></i>View Details
+                </button>
+                <button onclick="openShareModal('${auction.id}', '${auction.title.replace(/'/g, "\\'")}', '${auction.startingBid}')" class="bg-green-500 hover:bg-green-600 text-white px-3 py-2 rounded-lg text-sm transition-colors" title="Share">
+                    <i class="fas fa-share-alt"></i>
                 </button>
                 <button onclick="openARPreview(${auction.id})" class="bg-purple-600 hover:bg-purple-700 text-white px-3 py-2 rounded-lg text-sm transition-colors" title="AR Preview">
                     <i class="fas fa-camera"></i>
@@ -1096,6 +1101,7 @@ const _origSwitchTab = typeof switchTab === 'function' ? switchTab : null;
         if (tabName === 'video' && !videoPlaylistData.length) loadVideoPlaylist();
         if (tabName === 'map'   && userLocation) renderNearbyAuctions();
         if (tabName === 'filter') renderFilterPresets();
+        if (tabName === 'admin') loadAdminStats();
     };
 })();
 
@@ -1287,3 +1293,429 @@ function stopVoiceRecognition() {
     setVoiceStatus('Click to start listening', false);
     document.getElementById('voiceTranscript').textContent = '';
 }
+
+// Admin Dashboard functionality
+let currentAdminSection = 'users';
+let adminData = {
+    users: { page: 1, totalPages: 1 },
+    auctions: { page: 1, totalPages: 1 },
+    revenue: { page: 1, totalPages: 1 },
+    security: { page: 1, totalPages: 1 },
+    audit: { page: 1, totalPages: 1 }
+};
+
+// Check if user is admin and show admin tab
+function checkAdminAccess() {
+    if (currentUser && (currentUser.role === 'admin' || currentUser.role === 'moderator')) {
+        const adminTab = document.getElementById('adminTab');
+        if (adminTab) {
+            adminTab.style.display = 'block';
+        }
+    }
+}
+
+// Load admin dashboard stats
+async function loadAdminStats() {
+    try {
+        const token = localStorage.getItem('authToken');
+        const response = await fetch('/api/admin/dashboard/stats', {
+            headers: {
+                'Authorization': `Bearer ${token}`
+            }
+        });
+        
+        if (response.ok) {
+            const stats = await response.json();
+            document.getElementById('totalUsers').textContent = stats.users?.total_users || 0;
+            document.getElementById('activeAuctions').textContent = stats.auctions?.active_auctions || 0;
+            document.getElementById('revenue30d').textContent = `$${stats.revenue?.revenue_30d || 0}`;
+            document.getElementById('securityAlerts').textContent = stats.security?.openAlerts || 0;
+        }
+    } catch (error) {
+        console.error('Error loading admin stats:', error);
+    }
+}
+
+// Show admin section
+function showAdminSection(section) {
+    // Update navigation buttons
+    document.querySelectorAll('.admin-nav-btn').forEach(btn => {
+        btn.classList.remove('bg-purple-600', 'text-white');
+        btn.classList.add('bg-transparent', 'text-gray-600');
+    });
+    
+    event.target.classList.remove('bg-transparent', 'text-gray-600');
+    event.target.classList.add('bg-purple-600', 'text-white');
+    
+    // Hide all sections
+    document.querySelectorAll('.admin-section').forEach(sec => {
+        sec.classList.add('hidden');
+    });
+    
+    // Show selected section
+    const sectionElement = document.getElementById(`${section}Section`);
+    if (sectionElement) {
+        sectionElement.classList.remove('hidden');
+        currentAdminSection = section;
+        loadAdminSection(section);
+    }
+}
+
+// Load admin section data
+async function loadAdminSection(section) {
+    switch (section) {
+        case 'users':
+            await loadUsers();
+            break;
+        case 'auctions':
+            await loadAuctionsAdmin();
+            break;
+        case 'revenue':
+            await loadRevenue();
+            break;
+        case 'security':
+            await loadSecurity();
+            break;
+        case 'config':
+            await loadConfig();
+            break;
+        case 'audit':
+            await loadAudit();
+            break;
+    }
+}
+
+// Load users for admin
+async function loadUsers(page = 1) {
+    try {
+        const token = localStorage.getItem('authToken');
+        const search = document.getElementById('userSearch')?.value || '';
+        const role = document.getElementById('userRoleFilter')?.value || '';
+        const status = document.getElementById('userStatusFilter')?.value || '';
+        
+        const params = new URLSearchParams({
+            page: page.toString(),
+            limit: '10'
+        });
+        
+        if (search) params.append('search', search);
+        if (role) params.append('role', role);
+        if (status) params.append('status', status);
+        
+        const response = await fetch(`/api/admin/users?${params}`, {
+            headers: {
+                'Authorization': `Bearer ${token}`
+            }
+        });
+        
+        if (response.ok) {
+            const data = await response.json();
+            adminData.users = { page: data.page, totalPages: data.totalPages };
+            renderUsersTable(data.users);
+            renderUsersPagination(data);
+        }
+    } catch (error) {
+        console.error('Error loading users:', error);
+    }
+}
+
+// Render users table
+function renderUsersTable(users) {
+    const tbody = document.getElementById('usersTableBody');
+    if (!users || users.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="6" class="text-center py-4 text-gray-400">No users found</td></tr>';
+        return;
+    }
+    
+    tbody.innerHTML = users.map(user => `
+        <tr class="border-b border-white/5">
+            <td class="py-2">${user.username}</td>
+            <td class="py-2">${user.email || '-'}</td>
+            <td class="py-2">
+                <span class="px-2 py-1 rounded text-xs ${
+                    user.role === 'admin' ? 'bg-red-500/20 text-red-400' :
+                    user.role === 'moderator' ? 'bg-yellow-500/20 text-yellow-400' :
+                    'bg-gray-500/20 text-gray-400'
+                }">${user.role}</span>
+            </td>
+            <td class="py-2">
+                <span class="px-2 py-1 rounded text-xs ${
+                    user.is_active ? 'bg-green-500/20 text-green-400' : 'bg-red-500/20 text-red-400'
+                }">${user.is_active ? 'Active' : 'Inactive'}</span>
+            </td>
+            <td class="py-2 text-xs text-gray-400">${new Date(user.created_at).toLocaleDateString()}</td>
+            <td class="py-2">
+                <div class="flex gap-1">
+                    <select onchange="updateUserRole('${user.id}', this.value)" class="text-xs bg-white/10 border border-white/20 rounded px-1 py-0.5">
+                        <option value="user" ${user.role === 'user' ? 'selected' : ''}>User</option>
+                        <option value="moderator" ${user.role === 'moderator' ? 'selected' : ''}>Mod</option>
+                        <option value="admin" ${user.role === 'admin' ? 'selected' : ''}>Admin</option>
+                    </select>
+                    <button onclick="toggleUserStatus('${user.id}')" class="text-xs bg-white/10 border border-white/20 rounded px-2 py-0.5 hover:bg-white/20">
+                        ${user.is_active ? 'Disable' : 'Enable'}
+                    </button>
+                </div>
+            </td>
+        </tr>
+    `).join('');
+}
+
+// Render users pagination
+function renderUsersPagination(data) {
+    const pagination = document.getElementById('usersPagination');
+    const info = document.getElementById('usersPaginationInfo');
+    
+    if (info) {
+        info.textContent = `Showing ${data.page} of ${data.totalPages} pages (${data.total} users)`;
+    }
+    
+    if (!pagination) return;
+    
+    let html = '';
+    if (data.page > 1) {
+        html += `<button onclick="loadUsers(${data.page - 1})" class="px-2 py-1 text-xs bg-white/10 border border-white/20 rounded hover:bg-white/20">Prev</button>`;
+    }
+    
+    for (let i = Math.max(1, data.page - 2); i <= Math.min(data.totalPages, data.page + 2); i++) {
+        html += `<button onclick="loadUsers(${i})" class="px-2 py-1 text-xs ${i === data.page ? 'bg-purple-600' : 'bg-white/10 border border-white/20'} rounded hover:bg-white/20">${i}</button>`;
+    }
+    
+    if (data.page < data.totalPages) {
+        html += `<button onclick="loadUsers(${data.page + 1})" class="px-2 py-1 text-xs bg-white/10 border border-white/20 rounded hover:bg-white/20">Next</button>`;
+    }
+    
+    pagination.innerHTML = html;
+}
+
+// Update user role
+async function updateUserRole(userId, newRole) {
+    try {
+        const token = localStorage.getItem('authToken');
+        const response = await fetch(`/api/admin/users/${userId}/role`, {
+            method: 'PATCH',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${token}`
+            },
+            body: JSON.stringify({ role: newRole })
+        });
+        
+        if (response.ok) {
+            showNotification('User role updated successfully', 'success');
+            await loadUsers(adminData.users.page);
+        } else {
+            showNotification('Failed to update user role', 'error');
+        }
+    } catch (error) {
+        console.error('Error updating user role:', error);
+        showNotification('Error updating user role', 'error');
+    }
+}
+
+// Toggle user status
+async function toggleUserStatus(userId) {
+    try {
+        const token = localStorage.getItem('authToken');
+        const response = await fetch(`/api/admin/users/${userId}/status`, {
+            method: 'PATCH',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${token}`
+            }
+        });
+        
+        if (response.ok) {
+            showNotification('User status updated successfully', 'success');
+            await loadUsers(adminData.users.page);
+        } else {
+            showNotification('Failed to update user status', 'error');
+        }
+    } catch (error) {
+        console.error('Error updating user status:', error);
+        showNotification('Error updating user status', 'error');
+    }
+}
+
+// Social Sharing functionality
+let currentShareAuction = null;
+
+// Open share modal
+function openShareModal(auctionId, auctionTitle, startingBid) {
+    currentShareAuction = { id: auctionId, title: auctionTitle, startingBid: startingBid };
+    
+    const modal = document.getElementById('shareModal');
+    const titleElement = document.getElementById('shareAuctionTitle');
+    const messageElement = document.getElementById('customShareMessage');
+    
+    if (titleElement) titleElement.textContent = auctionTitle;
+    if (messageElement) messageElement.value = `Check out this auction: "${auctionTitle}" - Starting bid: ${startingBid} XLM`;
+    
+    // Check for native sharing support
+    if (navigator.share) {
+        document.getElementById('nativeShareContainer').style.display = 'block';
+    }
+    
+    modal.classList.remove('hidden');
+}
+
+// Close share modal
+function closeShareModal() {
+    const modal = document.getElementById('shareModal');
+    modal.classList.add('hidden');
+    currentShareAuction = null;
+    
+    // Reset form
+    document.getElementById('customShareMessage').value = '';
+    document.getElementById('generateShareImage').checked = false;
+    document.getElementById('sharePreview').classList.add('hidden');
+}
+
+// Share on social media
+async function shareOnSocial(platform) {
+    if (!currentShareAuction) return;
+    
+    const customMessage = document.getElementById('customShareMessage').value || 
+        `Check out this auction: "${currentShareAuction.title}" - Starting bid: ${currentShareAuction.startingBid} XLM`;
+    const generateImage = document.getElementById('generateShareImage').checked;
+    
+    try {
+        const response = await fetch('/api/share', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${localStorage.getItem('authToken')}`
+            },
+            body: JSON.stringify({
+                auctionId: currentShareAuction.id,
+                platform: platform,
+                customMessage: customMessage,
+                generateImage: generateImage
+            })
+        });
+        
+        if (response.ok) {
+            const data = await response.json();
+            
+            // Track engagement
+            if (data.shareId) {
+                trackShareEngagement(data.shareId, 'click');
+            }
+            
+            // Open share URL or copy link
+            if (platform === 'copy_link') {
+                await navigator.clipboard.writeText(data.shareUrl);
+                showNotification('Link copied to clipboard!', 'success');
+            } else {
+                window.open(data.platformUrl, '_blank', 'width=600,height=400');
+                showNotification(`Shared on ${platform}!`, 'success');
+            }
+            
+            // Show preview
+            showSharePreview(data.message, data.shareUrl);
+            
+        } else {
+            showNotification('Failed to share auction', 'error');
+        }
+    } catch (error) {
+        console.error('Share error:', error);
+        showNotification('Error sharing auction', 'error');
+    }
+}
+
+// Native sharing
+async function shareNatively() {
+    if (!currentShareAuction || !navigator.share) return;
+    
+    const customMessage = document.getElementById('customShareMessage').value || 
+        `Check out this auction: "${currentShareAuction.title}" - Starting bid: ${currentShareAuction.startingBid} XLM`;
+    const shareUrl = `${window.location.origin}/auction/${currentShareAuction.id}`;
+    
+    try {
+        await navigator.share({
+            title: currentShareAuction.title,
+            text: customMessage,
+            url: shareUrl
+        });
+        
+        // Track the share
+        trackShare(currentShareAuction.id, 'native', customMessage);
+        showNotification('Shared successfully!', 'success');
+        
+    } catch (error) {
+        if (error.name !== 'AbortError') {
+            console.error('Native share error:', error);
+            showNotification('Error sharing', 'error');
+        }
+    }
+}
+
+// Track share
+async function trackShare(auctionId, platform, message) {
+    try {
+        await fetch('/api/share', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${localStorage.getItem('authToken')}`
+            },
+            body: JSON.stringify({
+                auctionId: auctionId,
+                platform: platform,
+                customMessage: message,
+                generateImage: false
+            })
+        });
+    } catch (error) {
+        console.error('Track share error:', error);
+    }
+}
+
+// Track share engagement
+async function trackShareEngagement(shareId, engagementType) {
+    try {
+        await fetch(`/api/share/${shareId}/engage`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                engagementType: engagementType,
+                referrerUrl: document.referrer
+            })
+        });
+    } catch (error) {
+        console.error('Track engagement error:', error);
+    }
+}
+
+// Show share preview
+function showSharePreview(message, url) {
+    const preview = document.getElementById('sharePreview');
+    const content = document.getElementById('sharePreviewContent');
+    
+    if (preview && content) {
+        content.innerHTML = `
+            <p><strong>Message:</strong> ${message}</p>
+            <p><strong>URL:</strong> ${url}</p>
+        `;
+        preview.classList.remove('hidden');
+    }
+}
+
+// Add event listeners for admin filters
+document.addEventListener('DOMContentLoaded', () => {
+    // User search and filters
+    const userSearch = document.getElementById('userSearch');
+    const userRoleFilter = document.getElementById('userRoleFilter');
+    const userStatusFilter = document.getElementById('userStatusFilter');
+    
+    if (userSearch) {
+        userSearch.addEventListener('input', () => loadUsers(1));
+    }
+    if (userRoleFilter) {
+        userRoleFilter.addEventListener('change', () => loadUsers(1));
+    }
+    if (userStatusFilter) {
+        userStatusFilter.addEventListener('change', () => loadUsers(1));
+    }
+});
