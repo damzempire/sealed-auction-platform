@@ -1709,6 +1709,22 @@ function showSharePreview(message, url) {
     }
 }
 
+// Update user display and show analytics link
+function updateUserDisplay() {
+    const userMenu = document.getElementById('userMenu');
+    const usernameDisplay = document.getElementById('usernameDisplay');
+    const analyticsLink = document.getElementById('analyticsLink');
+    
+    if (currentUser) {
+        if (userMenu) userMenu.classList.remove('hidden');
+        if (usernameDisplay) usernameDisplay.textContent = currentUser.username || currentUser.email || 'User';
+        if (analyticsLink) analyticsLink.classList.remove('hidden');
+    } else {
+        if (userMenu) userMenu.classList.add('hidden');
+        if (analyticsLink) analyticsLink.classList.add('hidden');
+    }
+}
+
 // Add event listeners for admin filters
 document.addEventListener('DOMContentLoaded', () => {
     // User search and filters
@@ -1726,3 +1742,15 @@ document.addEventListener('DOMContentLoaded', () => {
         userStatusFilter.addEventListener('change', () => loadUsers(1));
     }
 });
+
+// Onboarding Wizard Integration
+function startOnboardingWizard() {
+    if (window.onboardingWizard) {
+        window.onboardingWizard.showHelp();
+    } else {
+        console.warn('Onboarding wizard not initialized');
+    }
+}
+
+// Make functions globally available
+window.startOnboardingWizard = startOnboardingWizard;

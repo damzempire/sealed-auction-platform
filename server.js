@@ -634,6 +634,7 @@ app.post('/api/auctions',
     };
     
     io.emit('auctionCreated', auction);
+    io.to('dashboard').emit('auction_update', { type: 'auction', data: auction });
     res.status(201).sendData(responseData, 'auctionCreated');
   } catch (error) {
     logError('Auction creation failed:', error, { endpoint: '/api/auctions', method: 'POST' });
@@ -734,6 +735,16 @@ app.post('/api/auctions/:id/bids',
     }
     
     io.emit('bidPlaced', { auctionId, bidCount: auction ? auction.bids.length : 1 });
+    
+    // Send detailed bid data to dashboard
+    const bidData = {
+      id: bidId,
+      auction_id: auctionId,
+      amount: amount,
+      timestamp: new Date().toISOString(),
+      bidder_id: req.user?.id || 'anonymous'
+    };
+    io.to('dashboard').emit('bid_update', { type: 'bid', data: bidData });
     res.status(201).sendData({ 
       message: 'Bid placed successfully', 
       bidId,
@@ -810,6 +821,7 @@ app.patch('/api/auctions/:id',
       }
     };
     io.emit('auctionClosed', responseData);
+    io.to('dashboard').emit('auction_update', { type: 'auction', data: responseData });
     res.sendData(responseData, 'auctionClosed');
   } catch (error) {
     logError('Error closing auction:', error, { endpoint: '/api/auctions/:id', method: 'PATCH' });
@@ -1507,6 +1519,594 @@ app.post('/api/share/generate-image', async (req, res) => {
   }
 });
 
+// Dashboard analytics endpoint
+app.get('/api/dashboard/data', (req, res) => {
+  try {
+    const auctions = db.getAllAuctions();
+    const bids = [];
+    
+    // Collect all bids from all auctions
+    auctions.forEach(auction => {
+      const auctionBids = db.getBidsForAuction(auction.id);
+      bids.push(...auctionBids);
+    });
+    
+    // Get revenue data
+    const revenue = [];
+    try {
+      // Simulate revenue data from database (you may need to add this method to database.js)
+      const stmt = db.db.prepare('SELECT * FROM revenue_tracking ORDER BY created_at DESC');
+      const revenueData = stmt.all();
+      revenue.push(...revenueData);
+    } catch (error) {
+      console.warn('Revenue tracking table not found or empty:', error.message);
+    }
+    
+    res.json({
+      success: true,
+      data: {
+        auctions,
+        bids,
+        revenue
+      }
+    });
+  } catch (error) {
+    console.error('Error fetching dashboard data:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to fetch dashboard data'
+    });
+  }
+});
+
+// ==================== BOOKMARK MANAGEMENT API ENDPOINTS ====================
+
+// Get all bookmarks for a user
+app.get('/api/bookmarks', authenticateToken, (req, res) => {
+  try {
+    const userId = req.user.id;
+    const { folderId, type, isFavorite, search, tags, limit } = req.query;
+    
+    const options = {};
+    if (folderId !== undefined) options.folderId = folderId === 'null' ? null : folderId;
+    if (type) options.type = type;
+    if (isFavorite !== undefined) options.isFavorite = isFavorite === 'true';
+    if (search) options.search = search;
+    if (tags) options.tags = tags.split(',');
+    if (limit) options.limit = parseInt(limit);
+    
+    const bookmarks = db.getBookmarks(userId, options);
+    const folders = db.getBookmarkFolders(userId);
+    const bookmarkTags = db.getBookmarkTags(userId);
+    
+    res.json({
+      success: true,
+      data: {
+        bookmarks,
+        folders,
+        tags: bookmarkTags
+      }
+    });
+  } catch (error) {
+    console.error('Error fetching bookmarks:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to fetch bookmarks'
+    });
+  }
+});
+
+// Create a new bookmark
+app.post('/api/bookmarks', authenticateToken, (req, res) => {
+  try {
+    const userId = req.user.id;
+    const bookmarkData = {
+      id: db.generateId(),
+      title: req.body.title,
+      description: req.body.description,
+      url: req.body.url,
+      type: req.body.type || 'custom',
+      targetId: req.body.targetId,
+      userId: userId,
+      folderId: req.body.folderId,
+      favicon: req.body.favicon,
+      thumbnail: req.body.thumbnail,
+      isFavorite: req.body.isFavorite,
+      isPrivate: req.body.isPrivate,
+      sortOrder: req.body.sortOrder,
+      metadata: req.body.metadata,
+      tags: req.body.tags || []
+    };
+    
+    const result = db.createBookmark(bookmarkData);
+    
+    // Create sync record
+    db.createSyncRecord({
+      id: db.generateId(),
+      userId: userId,
+      deviceId: req.body.deviceId || 'web',
+      bookmarkId: bookmarkData.id,
+      action: 'create',
+      syncData: bookmarkData
+    });
+    
+    res.status(201).json({
+      success: true,
+      data: { id: bookmarkData.id }
+    });
+  } catch (error) {
+    console.error('Error creating bookmark:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to create bookmark'
+    });
+  }
+});
+
+// Get a specific bookmark
+app.get('/api/bookmarks/:id', authenticateToken, (req, res) => {
+  try {
+    const userId = req.user.id;
+    const bookmarkId = req.params.id;
+    
+    const bookmark = db.getBookmarkById(bookmarkId, userId);
+    
+    if (!bookmark) {
+      return res.status(404).json({
+        success: false,
+        error: 'Bookmark not found'
+      });
+    }
+    
+    res.json({
+      success: true,
+      data: bookmark
+    });
+  } catch (error) {
+    console.error('Error fetching bookmark:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to fetch bookmark'
+    });
+  }
+});
+
+// Update a bookmark
+app.put('/api/bookmarks/:id', authenticateToken, (req, res) => {
+  try {
+    const userId = req.user.id;
+    const bookmarkId = req.params.id;
+    
+    // Check if bookmark exists and belongs to user
+    const existingBookmark = db.getBookmarkById(bookmarkId, userId);
+    if (!existingBookmark) {
+      return res.status(404).json({
+        success: false,
+        error: 'Bookmark not found'
+      });
+    }
+    
+    const updates = {
+      title: req.body.title,
+      description: req.body.description,
+      url: req.body.url,
+      folderId: req.body.folderId,
+      favicon: req.body.favicon,
+      thumbnail: req.body.thumbnail,
+      isFavorite: req.body.isFavorite,
+      isPrivate: req.body.isPrivate,
+      sortOrder: req.body.sortOrder,
+      metadata: req.body.metadata,
+      tags: req.body.tags
+    };
+    
+    // Remove undefined values
+    Object.keys(updates).forEach(key => updates[key] === undefined && delete updates[key]);
+    
+    const result = db.updateBookmark(bookmarkId, updates, userId);
+    
+    // Create sync record
+    db.createSyncRecord({
+      id: db.generateId(),
+      userId: userId,
+      deviceId: req.body.deviceId || 'web',
+      bookmarkId: bookmarkId,
+      action: 'update',
+      syncData: { ...updates, id: bookmarkId }
+    });
+    
+    res.json({
+      success: true,
+      data: { updated: result.changes > 0 }
+    });
+  } catch (error) {
+    console.error('Error updating bookmark:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to update bookmark'
+    });
+  }
+});
+
+// Update bookmark sort order
+app.put('/api/bookmarks/:id/sort', authenticateToken, (req, res) => {
+  try {
+    const userId = req.user.id;
+    const bookmarkId = req.params.id;
+    const { sortOrder } = req.body;
+    
+    const result = db.updateBookmark(bookmarkId, { sortOrder }, userId);
+    
+    res.json({
+      success: true,
+      data: { updated: result.changes > 0 }
+    });
+  } catch (error) {
+    console.error('Error updating bookmark sort order:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to update bookmark sort order'
+    });
+  }
+});
+
+// Delete a bookmark
+app.delete('/api/bookmarks/:id', authenticateToken, (req, res) => {
+  try {
+    const userId = req.user.id;
+    const bookmarkId = req.params.id;
+    
+    // Check if bookmark exists and belongs to user
+    const existingBookmark = db.getBookmarkById(bookmarkId, userId);
+    if (!existingBookmark) {
+      return res.status(404).json({
+        success: false,
+        error: 'Bookmark not found'
+      });
+    }
+    
+    const result = db.deleteBookmark(bookmarkId, userId);
+    
+    // Create sync record
+    db.createSyncRecord({
+      id: db.generateId(),
+      userId: userId,
+      deviceId: req.body.deviceId || 'web',
+      bookmarkId: bookmarkId,
+      action: 'delete',
+      syncData: { id: bookmarkId }
+    });
+    
+    res.json({
+      success: true,
+      data: { deleted: result.changes > 0 }
+    });
+  } catch (error) {
+    console.error('Error deleting bookmark:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to delete bookmark'
+    });
+  }
+});
+
+// ==================== BOOKMARK FOLDERS API ENDPOINTS ====================
+
+// Get all folders for a user
+app.get('/api/bookmarks/folders', authenticateToken, (req, res) => {
+  try {
+    const userId = req.user.id;
+    const { parentFolderId } = req.query;
+    
+    const folders = db.getBookmarkFolders(userId, parentFolderId);
+    
+    res.json({
+      success: true,
+      data: folders
+    });
+  } catch (error) {
+    console.error('Error fetching folders:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to fetch folders'
+    });
+  }
+});
+
+// Create a new folder
+app.post('/api/bookmarks/folders', authenticateToken, (req, res) => {
+  try {
+    const userId = req.user.id;
+    const folderData = {
+      id: db.generateId(),
+      name: req.body.name,
+      description: req.body.description,
+      userId: userId,
+      parentFolderId: req.body.parentFolderId,
+      color: req.body.color || '#3b82f6',
+      icon: req.body.icon || 'folder',
+      sortOrder: req.body.sortOrder
+    };
+    
+    const result = db.createBookmarkFolder(folderData);
+    
+    res.status(201).json({
+      success: true,
+      data: { id: folderData.id }
+    });
+  } catch (error) {
+    console.error('Error creating folder:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to create folder'
+    });
+  }
+});
+
+// Update a folder
+app.put('/api/bookmarks/folders/:id', authenticateToken, (req, res) => {
+  try {
+    const userId = req.user.id;
+    const folderId = req.params.id;
+    
+    const updates = {
+      name: req.body.name,
+      description: req.body.description,
+      parentFolderId: req.body.parentFolderId,
+      color: req.body.color,
+      icon: req.body.icon,
+      sortOrder: req.body.sortOrder
+    };
+    
+    // Remove undefined values
+    Object.keys(updates).forEach(key => updates[key] === undefined && delete updates[key]);
+    
+    const result = db.updateBookmarkFolder(folderId, updates, userId);
+    
+    res.json({
+      success: true,
+      data: { updated: result.changes > 0 }
+    });
+  } catch (error) {
+    console.error('Error updating folder:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to update folder'
+    });
+  }
+});
+
+// Delete a folder
+app.delete('/api/bookmarks/folders/:id', authenticateToken, (req, res) => {
+  try {
+    const userId = req.user.id;
+    const folderId = req.params.id;
+    
+    const result = db.deleteBookmarkFolder(folderId, userId);
+    
+    res.json({
+      success: true,
+      data: { deleted: result.changes > 0 }
+    });
+  } catch (error) {
+    console.error('Error deleting folder:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to delete folder'
+    });
+  }
+});
+
+// ==================== BOOKMARK TAGS API ENDPOINTS ====================
+
+// Get all tags for a user
+app.get('/api/bookmarks/tags', authenticateToken, (req, res) => {
+  try {
+    const userId = req.user.id;
+    const tags = db.getBookmarkTags(userId);
+    
+    res.json({
+      success: true,
+      data: tags
+    });
+  } catch (error) {
+    console.error('Error fetching tags:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to fetch tags'
+    });
+  }
+});
+
+// Create a new tag
+app.post('/api/bookmarks/tags', authenticateToken, (req, res) => {
+  try {
+    const userId = req.user.id;
+    const tagData = {
+      id: db.generateId(),
+      name: req.body.name,
+      color: req.body.color || '#10b981',
+      userId: userId
+    };
+    
+    const result = db.createBookmarkTag(tagData);
+    
+    res.status(201).json({
+      success: true,
+      data: { id: tagData.id }
+    });
+  } catch (error) {
+    console.error('Error creating tag:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to create tag'
+    });
+  }
+});
+
+// Delete a tag
+app.delete('/api/bookmarks/tags/:id', authenticateToken, (req, res) => {
+  try {
+    const userId = req.user.id;
+    const tagId = req.params.id;
+    
+    const result = db.deleteBookmarkTag(tagId, userId);
+    
+    res.json({
+      success: true,
+      data: { deleted: result.changes > 0 }
+    });
+  } catch (error) {
+    console.error('Error deleting tag:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to delete tag'
+    });
+  }
+});
+
+// ==================== BOOKMARK IMPORT/EXPORT API ENDPOINTS ====================
+
+// Export bookmarks
+app.get('/api/bookmarks/export', authenticateToken, (req, res) => {
+  try {
+    const userId = req.user.id;
+    const { format = 'json' } = req.query;
+    
+    const exportData = db.exportBookmarks(userId, format);
+    
+    if (format === 'json') {
+      res.setHeader('Content-Type', 'application/json');
+      res.setHeader('Content-Disposition', 'attachment; filename="bookmarks.json"');
+      res.send(exportData);
+    } else if (format === 'csv') {
+      res.setHeader('Content-Type', 'text/csv');
+      res.setHeader('Content-Disposition', 'attachment; filename="bookmarks.csv"');
+      res.send(exportData);
+    } else {
+      res.status(400).json({
+        success: false,
+        error: 'Unsupported export format'
+      });
+    }
+  } catch (error) {
+    console.error('Error exporting bookmarks:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to export bookmarks'
+    });
+  }
+});
+
+// Import bookmarks
+app.post('/api/bookmarks/import', authenticateToken, (req, res) => {
+  try {
+    const userId = req.user.id;
+    const { data, format = 'json', overwrite = false } = req.body;
+    
+    if (overwrite) {
+      // Delete existing bookmarks before import
+      // This would require additional database methods
+    }
+    
+    const results = db.importBookmarks(userId, data, format);
+    
+    res.json({
+      success: true,
+      data: results
+    });
+  } catch (error) {
+    console.error('Error importing bookmarks:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to import bookmarks'
+    });
+  }
+});
+
+// ==================== BOOKMARK SYNC API ENDPOINTS ====================
+
+// Sync bookmarks
+app.post('/api/bookmarks/sync', authenticateToken, (req, res) => {
+  try {
+    const userId = req.user.id;
+    const { deviceId } = req.body;
+    
+    // Get pending sync records for this device
+    const pendingRecords = db.getPendingSyncRecords(userId, deviceId);
+    
+    let updated = 0;
+    
+    // Process each sync record
+    for (const record of pendingRecords) {
+      try {
+        switch (record.action) {
+          case 'create':
+            // Check if bookmark already exists
+            const existing = db.getBookmarkById(record.bookmark_id, userId);
+            if (!existing && record.sync_data) {
+              db.createBookmark(record.sync_data);
+              updated++;
+            }
+            break;
+            
+          case 'update':
+            if (record.sync_data) {
+              db.updateBookmark(record.bookmark_id, record.sync_data, userId);
+              updated++;
+            }
+            break;
+            
+          case 'delete':
+            db.deleteBookmark(record.bookmark_id, userId);
+            updated++;
+            break;
+        }
+        
+        // Mark record as synced
+        db.markSyncRecordsAsSynced([record.id]);
+      } catch (error) {
+        console.error('Error processing sync record:', error);
+      }
+    }
+    
+    res.json({
+      success: true,
+      data: {
+        updated,
+        total: pendingRecords.length
+      }
+    });
+  } catch (error) {
+    console.error('Error syncing bookmarks:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to sync bookmarks'
+    });
+  }
+});
+
+// Get pending sync records
+app.get('/api/bookmarks/sync/pending', authenticateToken, (req, res) => {
+  try {
+    const userId = req.user.id;
+    const { deviceId } = req.query;
+    
+    const pendingRecords = db.getPendingSyncRecords(userId, deviceId);
+    
+    res.json({
+      success: true,
+      data: pendingRecords
+    });
+  } catch (error) {
+    console.error('Error fetching sync records:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to fetch sync records'
+    });
+  }
+});
+
 // Serve generated share images
 app.get('/api/share/image/:auctionId', (req, res) => {
   try {
@@ -1552,12 +2152,27 @@ app.get('/api/share/image/:auctionId', (req, res) => {
   }
 });
 
+// Dashboard route
+app.get('/dashboard', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'dashboard.html'));
+});
+
+// Bookmark manager route
+app.get('/bookmarks', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'bookmarks.html'));
+});
+
 // Socket.io connections
 io.on('connection', (socket) => {
   console.log('User connected:', socket.id);
   
   socket.on('joinAuction', (auctionId) => {
     socket.join(auctionId);
+  });
+  
+  socket.on('joinDashboard', () => {
+    socket.join('dashboard');
+    console.log('User joined dashboard room:', socket.id);
   });
   
   socket.on('disconnect', () => {
@@ -1587,6 +2202,10 @@ setInterval(() => {
       db.closeAuction(auction.id, winnerId, winningBidId);
       
       io.emit('auctionClosed', { ...auction, status: 'closed', winner: winnerId, winningBid: winningBidId });
+      io.to('dashboard').emit('auction_update', { 
+        type: 'auction', 
+        data: { ...auction, status: 'closed', winner: winnerId, winningBid: winningBidId } 
+      });
     }
   }
 }, 60000); // Check every minute
@@ -2475,6 +3094,104 @@ app.patch('/api/tokens/:tokenId/status', authenticateToken, async (req, res) => 
 const BACKUP_INTERVAL = 5 * 60 * 1000; // 5 minutes
 setInterval(backupData, BACKUP_INTERVAL);
 console.log(`Automated backup scheduled to run every ${BACKUP_INTERVAL / 60000} minutes.`);
+
+// Bid History Analytics API Endpoints
+app.get('/api/bid-history', authenticateToken, (req, res) => {
+  try {
+    const userId = req.user.id;
+    const filters = {
+      limit: parseInt(req.query.limit) || 50,
+      offset: parseInt(req.query.offset) || 0,
+      status: req.query.status,
+      dateFrom: req.query.dateFrom,
+      dateTo: req.query.dateTo,
+      sortBy: req.query.sortBy || 'timestamp',
+      sortOrder: req.query.sortOrder || 'DESC'
+    };
+
+    const bidHistory = db.getUserBidHistory(userId, filters);
+    res.json(bidHistory);
+  } catch (error) {
+    logError('Error fetching bid history:', error, { endpoint: '/api/bid-history', userId: req.user?.id });
+    res.status(500).json({ error: 'Failed to fetch bid history' });
+  }
+});
+
+app.get('/api/bid-statistics', authenticateToken, (req, res) => {
+  try {
+    const userId = req.user.id;
+    const statistics = db.getUserBidStatistics(userId);
+    res.json(statistics);
+  } catch (error) {
+    logError('Error fetching bid statistics:', error, { endpoint: '/api/bid-statistics', userId: req.user?.id });
+    res.status(500).json({ error: 'Failed to fetch bid statistics' });
+  }
+});
+
+app.get('/api/spending-analytics', authenticateToken, (req, res) => {
+  try {
+    const userId = req.user.id;
+    const period = req.query.period || 'monthly';
+    const analytics = db.getSpendingAnalytics(userId, period);
+    res.json(analytics);
+  } catch (error) {
+    logError('Error fetching spending analytics:', error, { endpoint: '/api/spending-analytics', userId: req.user?.id });
+    res.status(500).json({ error: 'Failed to fetch spending analytics' });
+  }
+});
+
+app.get('/api/timeline-data', authenticateToken, (req, res) => {
+  try {
+    const userId = req.user.id;
+    const limit = parseInt(req.query.limit) || 100;
+    const timelineData = db.getTimelineData(userId, limit);
+    res.json(timelineData);
+  } catch (error) {
+    logError('Error fetching timeline data:', error, { endpoint: '/api/timeline-data', userId: req.user?.id });
+    res.status(500).json({ error: 'Failed to fetch timeline data' });
+  }
+});
+
+app.get('/api/competition-analysis', authenticateToken, (req, res) => {
+  try {
+    const userId = req.user.id;
+    const auctionId = req.query.auctionId || null;
+    const competitionData = db.getCompetitionAnalysis(userId, auctionId);
+    res.json(competitionData);
+  } catch (error) {
+    logError('Error fetching competition analysis:', error, { endpoint: '/api/competition-analysis', userId: req.user?.id });
+    res.status(500).json({ error: 'Failed to fetch competition analysis' });
+  }
+});
+
+app.get('/api/export-bid-history', authenticateToken, (req, res) => {
+  try {
+    const userId = req.user.id;
+    const format = req.query.format || 'json';
+    const filters = {
+      status: req.query.status,
+      dateFrom: req.query.dateFrom,
+      dateTo: req.query.dateTo,
+      sortBy: req.query.sortBy,
+      sortOrder: req.query.sortOrder
+    };
+
+    const exportData = db.exportBidHistory(userId, format, filters);
+    
+    if (format === 'csv') {
+      res.setHeader('Content-Type', 'text/csv');
+      res.setHeader('Content-Disposition', `attachment; filename="bid-history-${new Date().toISOString().split('T')[0]}.csv"`);
+    } else {
+      res.setHeader('Content-Type', 'application/json');
+      res.setHeader('Content-Disposition', `attachment; filename="bid-history-${new Date().toISOString().split('T')[0]}.json"`);
+    }
+    
+    res.send(exportData);
+  } catch (error) {
+    logError('Error exporting bid history:', error, { endpoint: '/api/export-bid-history', userId: req.user?.id });
+    res.status(500).json({ error: 'Failed to export bid history' });
+  }
+});
 
 if (sentryEnabled) {
   app.use(Sentry.Handlers.errorHandler());
