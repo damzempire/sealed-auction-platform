@@ -22,7 +22,8 @@ class AuctionDatabase {
         id TEXT PRIMARY KEY,
         username TEXT UNIQUE NOT NULL,
         email TEXT UNIQUE,
-        hashed_password TEXT NOT NULL,
+        hashed_password TEXT,
+        auth_type TEXT DEFAULT 'password' CHECK(auth_type IN ('password', 'oauth')),
         role TEXT DEFAULT 'user' CHECK(role IN ('user', 'admin', 'moderator')),
         failed_login_attempts INTEGER DEFAULT 0,
         last_failed_login DATETIME,
@@ -44,6 +45,24 @@ class AuctionDatabase {
         used INTEGER DEFAULT 0,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
         FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+      )
+    `);
+
+    // Create OAuth accounts table
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS oauth_accounts (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL,
+        provider TEXT NOT NULL CHECK(provider IN ('google', 'github', 'facebook', 'twitter')),
+        provider_id TEXT NOT NULL,
+        profile_data TEXT,
+        access_token TEXT,
+        refresh_token TEXT,
+        token_expires_at DATETIME,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+        UNIQUE(provider, provider_id)
       )
     `);
 
@@ -316,6 +335,167 @@ class AuctionDatabase {
       CREATE INDEX IF NOT EXISTS idx_bookmark_sync_user_id ON bookmark_sync(user_id);
       CREATE INDEX IF NOT EXISTS idx_bookmark_sync_device_id ON bookmark_sync(device_id);
       CREATE INDEX IF NOT EXISTS idx_bookmark_sync_synced ON bookmark_sync(synced);
+    `);
+
+    // Create NFT collections table
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS nft_collections (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        description TEXT,
+        creator_id TEXT NOT NULL,
+        contract_address TEXT,
+        blockchain TEXT DEFAULT 'stellar' CHECK(blockchain IN ('stellar', 'ethereum', 'polygon', 'bsc')),
+        total_supply INTEGER DEFAULT 0,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (creator_id) REFERENCES users(id)
+      )
+    `);
+
+    // Create NFT metadata table
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS nft_metadata (
+        id TEXT PRIMARY KEY,
+        token_id TEXT NOT NULL,
+        collection_id TEXT NOT NULL,
+        name TEXT NOT NULL,
+        description TEXT,
+        image_url TEXT,
+        image_hash TEXT,
+        animation_url TEXT,
+        external_url TEXT,
+        attributes TEXT,
+        background_color TEXT,
+        traits TEXT,
+        rarity_score REAL,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (collection_id) REFERENCES nft_collections(id),
+        UNIQUE(collection_id, token_id)
+      )
+    `);
+
+    // Create NFT ownership table
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS nft_ownership (
+        id TEXT PRIMARY KEY,
+        nft_id TEXT NOT NULL,
+        owner_id TEXT NOT NULL,
+        acquired_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        acquisition_price REAL,
+        acquisition_currency TEXT DEFAULT 'USD',
+        ownership_type TEXT DEFAULT 'owned' CHECK(ownership_type IN ('owned', 'listed', 'auctioned', 'transferred')),
+        is_active INTEGER DEFAULT 1,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (nft_id) REFERENCES nft_metadata(id),
+        FOREIGN KEY (owner_id) REFERENCES users(id)
+      )
+    `);
+
+    // Create NFT marketplace listings table
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS nft_marketplace_listings (
+        id TEXT PRIMARY KEY,
+        nft_id TEXT NOT NULL,
+        seller_id TEXT NOT NULL,
+        price REAL NOT NULL,
+        currency TEXT DEFAULT 'USD',
+        listing_type TEXT DEFAULT 'sale' CHECK(listing_type IN ('sale', 'auction', 'offer')),
+        auction_end_time DATETIME,
+        reserve_price REAL,
+        current_bid REAL DEFAULT 0,
+        bid_count INTEGER DEFAULT 0,
+        status TEXT DEFAULT 'active' CHECK(status IN ('active', 'sold', 'cancelled', 'expired')),
+        marketplace_fee REAL DEFAULT 0.025,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (nft_id) REFERENCES nft_metadata(id),
+        FOREIGN KEY (seller_id) REFERENCES users(id)
+      )
+    `);
+
+    // Create NFT transfer history table
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS nft_transfer_history (
+        id TEXT PRIMARY KEY,
+        nft_id TEXT NOT NULL,
+        from_owner_id TEXT,
+        to_owner_id TEXT NOT NULL,
+        transfer_type TEXT NOT NULL CHECK(transfer_type IN ('sale', 'gift', 'auction', 'burn', 'mint')),
+        transaction_hash TEXT,
+        block_number INTEGER,
+        price REAL,
+        currency TEXT DEFAULT 'USD',
+        marketplace_fee REAL,
+        royalty_fee REAL,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (nft_id) REFERENCES nft_metadata(id),
+        FOREIGN KEY (from_owner_id) REFERENCES users(id),
+        FOREIGN KEY (to_owner_id) REFERENCES users(id)
+      )
+    `);
+
+    // Create NFT verification table
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS nft_verification (
+        id TEXT PRIMARY KEY,
+        nft_id TEXT NOT NULL,
+        verification_type TEXT NOT NULL CHECK(verification_type IN ('ownership', 'authenticity', 'provenance', 'rarity')),
+        status TEXT DEFAULT 'pending' CHECK(status IN ('pending', 'verified', 'rejected', 'expired')),
+        verified_by TEXT,
+        verification_data TEXT,
+        blockchain_signature TEXT,
+        smart_contract_result TEXT,
+        expires_at DATETIME,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (nft_id) REFERENCES nft_metadata(id),
+        FOREIGN KEY (verified_by) REFERENCES users(id)
+      )
+    `);
+
+    // Create NFT offers table
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS nft_offers (
+        id TEXT PRIMARY KEY,
+        nft_id TEXT NOT NULL,
+        offerer_id TEXT NOT NULL,
+        price REAL NOT NULL,
+        currency TEXT DEFAULT 'USD',
+        status TEXT DEFAULT 'active' CHECK(status IN ('active', 'accepted', 'rejected', 'expired')),
+        expires_at DATETIME,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (nft_id) REFERENCES nft_metadata(id),
+        FOREIGN KEY (offerer_id) REFERENCES users(id)
+      )
+    `);
+
+    // Add NFT-related indexes
+    this.db.exec(`
+      CREATE INDEX IF NOT EXISTS idx_nft_collections_creator_id ON nft_collections(creator_id);
+      CREATE INDEX IF NOT EXISTS idx_nft_collections_blockchain ON nft_collections(blockchain);
+      CREATE INDEX IF NOT EXISTS idx_nft_metadata_collection_id ON nft_metadata(collection_id);
+      CREATE INDEX IF NOT EXISTS idx_nft_metadata_name ON nft_metadata(name);
+      CREATE INDEX IF NOT EXISTS idx_nft_ownership_nft_id ON nft_ownership(nft_id);
+      CREATE INDEX IF NOT EXISTS idx_nft_ownership_owner_id ON nft_ownership(owner_id);
+      CREATE INDEX IF NOT EXISTS idx_nft_ownership_is_active ON nft_ownership(is_active);
+      CREATE INDEX IF NOT EXISTS idx_nft_marketplace_listings_nft_id ON nft_marketplace_listings(nft_id);
+      CREATE INDEX IF NOT EXISTS idx_nft_marketplace_listings_seller_id ON nft_marketplace_listings(seller_id);
+      CREATE INDEX IF NOT EXISTS idx_nft_marketplace_listings_status ON nft_marketplace_listings(status);
+      CREATE INDEX IF NOT EXISTS idx_nft_marketplace_listings_price ON nft_marketplace_listings(price);
+      CREATE INDEX IF NOT EXISTS idx_nft_transfer_history_nft_id ON nft_transfer_history(nft_id);
+      CREATE INDEX IF NOT EXISTS idx_nft_transfer_history_from_owner ON nft_transfer_history(from_owner_id);
+      CREATE INDEX IF NOT EXISTS idx_nft_transfer_history_to_owner ON nft_transfer_history(to_owner_id);
+      CREATE INDEX IF NOT EXISTS idx_nft_transfer_history_created_at ON nft_transfer_history(created_at);
+      CREATE INDEX IF NOT EXISTS idx_nft_verification_nft_id ON nft_verification(nft_id);
+      CREATE INDEX IF NOT EXISTS idx_nft_verification_status ON nft_verification(status);
+      CREATE INDEX IF NOT EXISTS idx_nft_verification_type ON nft_verification(verification_type);
+      CREATE INDEX IF NOT EXISTS idx_nft_offers_nft_id ON nft_offers(nft_id);
+      CREATE INDEX IF NOT EXISTS idx_nft_offers_offerer_id ON nft_offers(offerer_id);
+      CREATE INDEX IF NOT EXISTS idx_nft_offers_status ON nft_offers(status);
     `);
   }
 
@@ -2709,6 +2889,133 @@ class AuctionDatabase {
     `);
     
     return stmt.run(...recordIds);
+  }
+
+  // OAuth operations
+  getUserByOAuthProvider(provider, providerId) {
+    const validation = this.securityLayer.validateInputs({ provider, providerId });
+    if (!validation.valid) {
+      console.warn('[SECURITY] Invalid OAuth provider data:', validation.errors);
+      return null;
+    }
+    
+    const stmt = this.securityLayer.prepare(`
+      SELECT u.*, oa.provider, oa.provider_id, oa.profile_data
+      FROM users u
+      JOIN oauth_accounts oa ON u.id = oa.user_id
+      WHERE oa.provider = ? AND oa.provider_id = ?
+    `);
+    return stmt.get(validation.sanitized.provider, validation.sanitized.providerId);
+  }
+
+  createOAuthUser(profileData) {
+    const validation = this.securityLayer.validateInputs({
+      id: crypto.randomUUID(),
+      username: profileData.username || profileData.name?.replace(/\s+/g, '').toLowerCase() || profileData.email?.split('@')[0],
+      email: profileData.email,
+      provider: profileData.provider,
+      providerId: profileData.providerId,
+      profileData: JSON.stringify(profileData)
+    });
+    
+    if (!validation.valid) {
+      throw new Error(validation.errors.join(', '));
+    }
+    
+    const sanitized = validation.sanitized;
+    
+    // Create user account
+    const userStmt = this.securityLayer.prepare(`
+      INSERT INTO users (id, username, email, hashed_password, auth_type, created_at)
+      VALUES (?, ?, ?, ?, 'oauth', CURRENT_TIMESTAMP)
+    `);
+    
+    userStmt.run(sanitized.id, sanitized.username, sanitized.email, null);
+    
+    // Create OAuth account link
+    const oauthStmt = this.securityLayer.prepare(`
+      INSERT INTO oauth_accounts (id, user_id, provider, provider_id, profile_data, created_at)
+      VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+    `);
+    
+    oauthStmt.run(crypto.randomUUID(), sanitized.id, sanitized.provider, sanitized.providerId, sanitized.profileData);
+    
+    return this.getUserById(sanitized.id);
+  }
+
+  linkOAuthAccount(userId, provider, providerId, profileData) {
+    const validation = this.securityLayer.validateInputs({
+      userId,
+      provider,
+      providerId,
+      profileData: JSON.stringify(profileData)
+    });
+    
+    if (!validation.valid) {
+      throw new Error(validation.errors.join(', '));
+    }
+    
+    const sanitized = validation.sanitized;
+    
+    const stmt = this.securityLayer.prepare(`
+      INSERT INTO oauth_accounts (id, user_id, provider, provider_id, profile_data, created_at)
+      VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+    `);
+    
+    return stmt.run(crypto.randomUUID(), sanitized.userId, sanitized.provider, sanitized.providerId, sanitized.profileData);
+  }
+
+  updateOAuthUserProfile(userId, profileData) {
+    const validation = this.securityLayer.validateInputs({
+      userId,
+      profileData: JSON.stringify(profileData)
+    });
+    
+    if (!validation.valid) {
+      throw new Error(validation.errors.join(', '));
+    }
+    
+    const sanitized = validation.sanitized;
+    
+    const stmt = this.securityLayer.prepare(`
+      UPDATE oauth_accounts 
+      SET profile_data = ?, updated_at = CURRENT_TIMESTAMP
+      WHERE user_id = ? AND provider = ?
+    `);
+    
+    return stmt.run(sanitized.profileData, sanitized.userId, profileData.provider);
+  }
+
+  getUserOAuthAccounts(userId) {
+    const validation = this.securityLayer.validateInput(userId);
+    if (!validation.valid) {
+      console.warn('[SECURITY] Invalid user ID format:', userId);
+      return [];
+    }
+    
+    const stmt = this.securityLayer.prepare(`
+      SELECT provider, provider_id, profile_data, created_at
+      FROM oauth_accounts
+      WHERE user_id = ?
+      ORDER BY created_at DESC
+    `);
+    return stmt.all(validation.sanitized);
+  }
+
+  unlinkOAuthAccount(userId, provider) {
+    const validation = this.securityLayer.validateInputs({ userId, provider });
+    if (!validation.valid) {
+      throw new Error(validation.errors.join(', '));
+    }
+    
+    const sanitized = validation.sanitized;
+    
+    const stmt = this.securityLayer.prepare(`
+      DELETE FROM oauth_accounts
+      WHERE user_id = ? AND provider = ?
+    `);
+    
+    return stmt.run(sanitized.userId, sanitized.provider);
   }
 }
 
