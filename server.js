@@ -2956,6 +2956,412 @@ app.get('/api/export-bid-history', authenticateToken, (req, res) => {
   }
 });
 
+// ==================== NFT MARKETPLACE API ENDPOINTS ====================
+
+// Get NFT collection with pagination and filtering
+app.get('/api/nft/collection', (req, res) => {
+  try {
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 12;
+    const category = req.query.category || 'all';
+    const verification = req.query.verification || 'all';
+    const minPrice = parseFloat(req.query.minPrice) || 0;
+    const maxPrice = parseFloat(req.query.maxPrice) || Infinity;
+    const search = req.query.search || '';
+    const sortBy = req.query.sortBy || 'created_at';
+    const sortOrder = req.query.sortOrder || 'desc';
+
+    const nfts = db.getNFTCollection({
+      page,
+      limit,
+      category,
+      verification,
+      minPrice,
+      maxPrice,
+      search,
+      sortBy,
+      sortOrder
+    });
+
+    res.json({
+      nfts: nfts.data,
+      pagination: {
+        page,
+        limit,
+        total: nfts.total,
+        totalPages: Math.ceil(nfts.total / limit),
+        hasMore: page * limit < nfts.total
+      }
+    });
+  } catch (error) {
+    logError('Error fetching NFT collection:', error, { endpoint: '/api/nft/collection' });
+    res.status(500).json({ error: 'Failed to fetch NFT collection' });
+  }
+});
+
+// Get NFT details by ID
+app.get('/api/nft/:id', (req, res) => {
+  try {
+    const { id } = req.params;
+    const nft = db.getNFTById(id);
+    
+    if (!nft) {
+      return res.status(404).json({ error: 'NFT not found' });
+    }
+
+    res.json(nft);
+  } catch (error) {
+    logError('Error fetching NFT details:', error, { endpoint: '/api/nft/:id', nftId: req.params.id });
+    res.status(500).json({ error: 'Failed to fetch NFT details' });
+  }
+});
+
+// Get NFT transaction history
+app.get('/api/nft/:id/transactions', (req, res) => {
+  try {
+    const { id } = req.params;
+    const transactions = db.getNFTTransactionHistory(id);
+    res.json(transactions);
+  } catch (error) {
+    logError('Error fetching NFT transactions:', error, { endpoint: '/api/nft/:id/transactions', nftId: req.params.id });
+    res.status(500).json({ error: 'Failed to fetch transaction history' });
+  }
+});
+
+// Get NFT collections
+app.get('/api/nft/collections', (req, res) => {
+  try {
+    const collections = db.getNFTCollections();
+    res.json(collections);
+  } catch (error) {
+    logError('Error fetching NFT collections:', error, { endpoint: '/api/nft/collections' });
+    res.status(500).json({ error: 'Failed to fetch collections' });
+  }
+});
+
+// Create new NFT collection
+app.post('/api/nft/collections', authenticateToken, (req, res) => {
+  try {
+    const { name, description, blockchain = 'stellar' } = req.body;
+    const userId = req.user.id;
+
+    if (!name) {
+      return res.status(400).json({ error: 'Collection name is required' });
+    }
+
+    const collection = db.createNFTCollection({
+      name,
+      description,
+      creator_id: userId,
+      blockchain
+    });
+
+    res.status(201).json(collection);
+  } catch (error) {
+    logError('Error creating NFT collection:', error, { endpoint: '/api/nft/collections', userId: req.user?.id });
+    res.status(500).json({ error: 'Failed to create collection' });
+  }
+});
+
+// Create new NFT
+app.post('/api/nft', authenticateToken, upload.single('image'), (req, res) => {
+  try {
+    const {
+      name,
+      description,
+      collection_id,
+      attributes,
+      blockchain = 'stellar'
+    } = req.body;
+
+    const userId = req.user.id;
+    const imagePath = req.file ? `/uploads/nft/${req.file.filename}` : null;
+
+    if (!name) {
+      return res.status(400).json({ error: 'NFT name is required' });
+    }
+
+    const nft = db.createNFT({
+      name,
+      description,
+      collection_id,
+      creator_id: userId,
+      image_url: imagePath,
+      attributes: attributes ? JSON.stringify(attributes) : null,
+      blockchain
+    });
+
+    // Create ownership record
+    db.createNFTOwnership({
+      nft_id: nft.id,
+      owner_id: userId,
+      ownership_type: 'owned'
+    });
+
+    // Create mint transaction record
+    db.createNFTTransfer({
+      nft_id: nft.id,
+      to_owner_id: userId,
+      transfer_type: 'mint'
+    });
+
+    res.status(201).json(nft);
+  } catch (error) {
+    logError('Error creating NFT:', error, { endpoint: '/api/nft', userId: req.user?.id });
+    res.status(500).json({ error: 'Failed to create NFT' });
+  }
+});
+
+// List NFT for sale
+app.post('/api/nft/:id/list', authenticateToken, (req, res) => {
+  try {
+    const { id } = req.params;
+    const { price, currency = 'USD', listing_type = 'sale', auction_end_time, reserve_price } = req.body;
+    const userId = req.user.id;
+
+    // Verify ownership
+    const ownership = db.getNFTOwnership(id, userId);
+    if (!ownership || !ownership.is_active) {
+      return res.status(403).json({ error: 'You do not own this NFT' });
+    }
+
+    const listing = db.createNFTListing({
+      nft_id: id,
+      seller_id: userId,
+      price,
+      currency,
+      listing_type,
+      auction_end_time,
+      reserve_price
+    });
+
+    // Update ownership type
+    db.updateNFTOwnership(id, userId, { ownership_type: 'listed' });
+
+    res.status(201).json(listing);
+  } catch (error) {
+    logError('Error listing NFT for sale:', error, { endpoint: '/api/nft/:id/list', userId: req.user?.id, nftId: req.params.id });
+    res.status(500).json({ error: 'Failed to list NFT for sale' });
+  }
+});
+
+// Get marketplace listings
+app.get('/api/nft/marketplace/listings', (req, res) => {
+  try {
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 12;
+    const status = req.query.status || 'active';
+    const listing_type = req.query.listing_type || 'all';
+    const sortBy = req.query.sortBy || 'created_at';
+    const sortOrder = req.query.sortOrder || 'desc';
+
+    const listings = db.getMarketplaceListings({
+      page,
+      limit,
+      status,
+      listing_type,
+      sortBy,
+      sortOrder
+    });
+
+    res.json({
+      listings: listings.data,
+      pagination: {
+        page,
+        limit,
+        total: listings.total,
+        totalPages: Math.ceil(listings.total / limit),
+        hasMore: page * limit < listings.total
+      }
+    });
+  } catch (error) {
+    logError('Error fetching marketplace listings:', error, { endpoint: '/api/nft/marketplace/listings' });
+    res.status(500).json({ error: 'Failed to fetch marketplace listings' });
+  }
+});
+
+// Make offer on NFT
+app.post('/api/nft/:id/offer', authenticateToken, (req, res) => {
+  try {
+    const { id } = req.params;
+    const { price, currency = 'USD', expires_at } = req.body;
+    const userId = req.user.id;
+
+    // Verify NFT exists and is not owned by the user
+    const nft = db.getNFTById(id);
+    if (!nft) {
+      return res.status(404).json({ error: 'NFT not found' });
+    }
+
+    const ownership = db.getNFTOwnership(id, userId);
+    if (ownership && ownership.is_active) {
+      return res.status(403).json({ error: 'You cannot make an offer on your own NFT' });
+    }
+
+    const offer = db.createNFTOffer({
+      nft_id: id,
+      offerer_id: userId,
+      price,
+      currency,
+      expires_at
+    });
+
+    res.status(201).json(offer);
+  } catch (error) {
+    logError('Error making NFT offer:', error, { endpoint: '/api/nft/:id/offer', userId: req.user?.id, nftId: req.params.id });
+    res.status(500).json({ error: 'Failed to make offer' });
+  }
+});
+
+// Accept NFT offer
+app.post('/api/nft/offer/:offerId/accept', authenticateToken, (req, res) => {
+  try {
+    const { offerId } = req.params;
+    const userId = req.user.id;
+
+    const offer = db.getNFTOfferById(offerId);
+    if (!offer) {
+      return res.status(404).json({ error: 'Offer not found' });
+    }
+
+    // Verify user owns the NFT
+    const ownership = db.getNFTOwnership(offer.nft_id, userId);
+    if (!ownership || !ownership.is_active) {
+      return res.status(403).json({ error: 'You do not own this NFT' });
+    }
+
+    // Process the transfer
+    const transfer = db.processNFTTransfer(offer.nft_id, userId, offer.offerer_id, 'sale', offer.price);
+
+    // Update ownership records
+    db.updateNFTOwnership(offer.nft_id, userId, { is_active: 0 });
+    db.createNFTOwnership({
+      nft_id: offer.nft_id,
+      owner_id: offer.offerer_id,
+      ownership_type: 'owned',
+      acquisition_price: offer.price
+    });
+
+    // Mark offer as accepted
+    db.updateNFTOffer(offerId, { status: 'accepted' });
+
+    res.json(transfer);
+  } catch (error) {
+    logError('Error accepting NFT offer:', error, { endpoint: '/api/nft/offer/:offerId/accept', userId: req.user?.id });
+    res.status(500).json({ error: 'Failed to accept offer' });
+  }
+});
+
+// Transfer NFT
+app.post('/api/nft/:id/transfer', authenticateToken, (req, res) => {
+  try {
+    const { id } = req.params;
+    const { to_address, transfer_type = 'gift' } = req.body;
+    const userId = req.user.id;
+
+    // Verify ownership
+    const ownership = db.getNFTOwnership(id, userId);
+    if (!ownership || !ownership.is_active) {
+      return res.status(403).json({ error: 'You do not own this NFT' });
+    }
+
+    // Find recipient user by wallet address
+    const recipient = db.getUserByWalletAddress(to_address);
+    if (!recipient) {
+      return res.status(404).json({ error: 'Recipient not found' });
+    }
+
+    // Process the transfer
+    const transfer = db.processNFTTransfer(id, userId, recipient.id, transfer_type);
+
+    // Update ownership records
+    db.updateNFTOwnership(id, userId, { is_active: 0 });
+    db.createNFTOwnership({
+      nft_id: id,
+      owner_id: recipient.id,
+      ownership_type: 'owned'
+    });
+
+    res.json(transfer);
+  } catch (error) {
+    logError('Error transferring NFT:', error, { endpoint: '/api/nft/:id/transfer', userId: req.user?.id, nftId: req.params.id });
+    res.status(500).json({ error: 'Failed to transfer NFT' });
+  }
+});
+
+// Verify NFT ownership
+app.post('/api/nft/:id/verify', authenticateToken, (req, res) => {
+  try {
+    const { id } = req.params;
+    const { verification_type = 'ownership' } = req.body;
+    const userId = req.user.id;
+
+    // Create verification request
+    const verification = db.createNFTVerification({
+      nft_id: id,
+      verification_type,
+      status: 'pending'
+    });
+
+    // In a real implementation, this would trigger blockchain verification
+    // For now, we'll simulate the verification process
+    setTimeout(() => {
+      const nft = db.getNFTById(id);
+      const isVerified = Math.random() > 0.3; // 70% success rate for demo
+      
+      db.updateNFTVerification(verification.id, {
+        status: isVerified ? 'verified' : 'rejected',
+        verified_by: 'system',
+        verification_data: JSON.stringify({
+          blockchain_signature: '0x' + Math.random().toString(16).substr(2, 64),
+          verified_at: new Date().toISOString()
+        })
+      });
+    }, 5000);
+
+    res.status(201).json(verification);
+  } catch (error) {
+    logError('Error verifying NFT:', error, { endpoint: '/api/nft/:id/verify', userId: req.user?.id, nftId: req.params.id });
+    res.status(500).json({ error: 'Failed to verify NFT' });
+  }
+});
+
+// Get NFT verification status
+app.get('/api/nft/:id/verification', (req, res) => {
+  try {
+    const { id } = req.params;
+    const verification = db.getNFTVerification(id);
+    res.json(verification);
+  } catch (error) {
+    logError('Error fetching NFT verification:', error, { endpoint: '/api/nft/:id/verification', nftId: req.params.id });
+    res.status(500).json({ error: 'Failed to fetch verification status' });
+  }
+});
+
+// Get user's NFT portfolio
+app.get('/api/user/nft/portfolio', authenticateToken, (req, res) => {
+  try {
+    const userId = req.user.id;
+    const portfolio = db.getUserNFTPortfolio(userId);
+    res.json(portfolio);
+  } catch (error) {
+    logError('Error fetching user NFT portfolio:', error, { endpoint: '/api/user/nft/portfolio', userId: req.user?.id });
+    res.status(500).json({ error: 'Failed to fetch portfolio' });
+  }
+});
+
+// Get NFT market statistics
+app.get('/api/nft/market/stats', (req, res) => {
+  try {
+    const period = req.query.period || '30d';
+    const stats = db.getNFTMarketStats(period);
+    res.json(stats);
+  } catch (error) {
+    logError('Error fetching NFT market stats:', error, { endpoint: '/api/nft/market/stats' });
+    res.status(500).json({ error: 'Failed to fetch market statistics' });
+  }
+});
+
 if (sentryEnabled) {
   app.use(Sentry.Handlers.errorHandler());
 }
