@@ -180,7 +180,38 @@ const corsOptions = {
 
 app.use(cors(corsOptions));
 app.use(express.json());
-app.use(express.static('public'));
+
+// Performance optimization middleware
+const compression = require('compression');
+app.use(compression({
+  filter: (req, res) => {
+    if (req.headers['x-no-compression']) {
+      return false;
+    }
+    return compression.filter(req, res);
+  },
+  level: 6,
+  threshold: 1024
+}));
+
+// Enhanced static file serving with caching
+app.use(express.static('public', {
+  maxAge: process.env.NODE_ENV === 'production' ? '1y' : '1d',
+  etag: true,
+  lastModified: true,
+  setHeaders: (res, path) => {
+    // Set different cache durations for different file types
+    if (path.endsWith('.html')) {
+      res.setHeader('Cache-Control', 'public, max-age=3600, must-revalidate');
+    } else if (path.endsWith('.js') || path.endsWith('.css')) {
+      res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+    } else if (path.match(/\.(jpg|jpeg|png|gif|webp|svg|ico)$/)) {
+      res.setHeader('Cache-Control', 'public, max-age=2592000, immutable');
+    } else if (path.endsWith('.woff') || path.endsWith('.woff2')) {
+      res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+    }
+  }
+}));
 
 // Session middleware for OAuth
 app.use(session({
