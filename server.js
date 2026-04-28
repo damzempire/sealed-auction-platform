@@ -22,6 +22,8 @@ const { v4: uuidv4 } = require('uuid');
 const { Server, Keypair, TransactionBuilder, Networks, BASE_FEE, Asset } = require('stellar-sdk');
 const session = require('express-session');
 const passport = require('passport');
+const GoogleStrategy = require('passport-google-oauth20').Strategy;
+const GitHubStrategy = require('passport-github2').Strategy;
 const AuctionDatabase = require('./database');
 const { ApplicationMetrics, createMetricsMiddleware } = require('./utils/metrics');
 const NetworkMonitor = require('./utils/network-monitor');
@@ -164,6 +166,116 @@ app.use(session({
 // Initialize Passport
 app.use(passport.initialize());
 app.use(passport.session());
+
+// Configure Passport strategies
+passport.serializeUser((user, done) => {
+  done(null, user.id);
+});
+
+passport.deserializeUser((id, done) => {
+  try {
+    const user = db.getUserById(id);
+    done(null, user);
+  } catch (error) {
+    done(error, null);
+  }
+});
+
+// Google OAuth Strategy
+if (process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET) {
+  passport.use(new GoogleStrategy({
+    clientID: process.env.GOOGLE_CLIENT_ID,
+    clientSecret: process.env.GOOGLE_CLIENT_SECRET,
+    callbackURL: "/auth/google/callback",
+    scope: ['profile', 'email']
+  }, async (accessToken, refreshToken, profile, done) => {
+    try {
+      // Extract user profile information
+      const profileData = {
+        id: profile.id,
+        email: profile.emails[0]?.value,
+        name: profile.displayName,
+        firstName: profile.name?.givenName,
+        lastName: profile.name?.familyName,
+        photo: profile.photos[0]?.value,
+        provider: 'google',
+        providerId: profile.id
+      };
+
+      // Find or create user
+      let user = db.getUserByOAuthProvider('google', profile.id);
+      
+      if (!user) {
+        // Check if user exists with same email (account linking)
+        const existingUser = db.getUserByEmail(profileData.email);
+        if (existingUser) {
+          // Link OAuth account to existing user
+          db.linkOAuthAccount(existingUser.id, 'google', profile.id, profileData);
+          user = existingUser;
+        } else {
+          // Create new user
+          user = db.createOAuthUser(profileData);
+        }
+      } else {
+        // Update user profile data
+        db.updateOAuthUserProfile(user.id, profileData);
+      }
+
+      return done(null, user);
+    } catch (error) {
+      console.error('Google OAuth error:', error);
+      return done(error, null);
+    }
+  }));
+}
+
+// GitHub OAuth Strategy
+if (process.env.GITHUB_CLIENT_ID && process.env.GITHUB_CLIENT_SECRET) {
+  passport.use(new GitHubStrategy({
+    clientID: process.env.GITHUB_CLIENT_ID,
+    clientSecret: process.env.GITHUB_CLIENT_SECRET,
+    callbackURL: "/auth/github/callback",
+    scope: ['user:email']
+  }, async (accessToken, refreshToken, profile, done) => {
+    try {
+      // Extract user profile information
+      const profileData = {
+        id: profile.id,
+        email: profile.emails?.[0]?.value || `${profile.username}@github.local`,
+        name: profile.displayName || profile.username,
+        username: profile.username,
+        photo: profile.photos?.[0]?.value,
+        provider: 'github',
+        providerId: profile.id,
+        bio: profile._json?.bio
+      };
+
+      // Find or create user
+      let user = db.getUserByOAuthProvider('github', profile.id);
+      
+      if (!user) {
+        // Check if user exists with same email (account linking)
+        const existingUser = db.getUserByEmail(profileData.email);
+        if (existingUser && profileData.email !== `${profile.username}@github.local`) {
+          // Link OAuth account to existing user
+          db.linkOAuthAccount(existingUser.id, 'github', profile.id, profileData);
+          user = existingUser;
+        } else {
+          // Create new user
+          user = db.createOAuthUser(profileData);
+        }
+      } else {
+        // Update user profile data
+        db.updateOAuthUserProfile(user.id, profileData);
+      }
+
+      return done(null, user);
+    } catch (error) {
+      console.error('GitHub OAuth error:', error);
+      return done(error, null);
+    }
+  }));
+}
 
 // Rate limiting configuration
 const JWT_SECRET = process.env.JWT_SECRET || 'your-jwt-secret-change-in-production';
@@ -998,37 +1110,197 @@ app.get('/api/users/lockout-status',
   }
 });
 
-// OAuth Routes (requires passport configuration)
-app.get('/auth/google', passport.authenticate('google', { scope: ['profile', 'email'] }));
-
-app.get('/auth/google/callback', 
-  passport.authenticate('google', { failureRedirect: '/login' }),
-  (req, res) => {
-    const token = generateToken(req.user);
-    res.redirect(`/?token=${token}&username=${req.user.username}`);
+// OAuth Routes with comprehensive error handling
+app.get('/auth/google', (req, res, next) => {
+  if (!process.env.GOOGLE_CLIENT_ID || !process.env.GOOGLE_CLIENT_SECRET) {
+    return res.status(503).json({ 
+      error: 'Google OAuth is not configured',
+      message: 'Please contact the administrator to set up Google OAuth'
+    });
   }
-);
+  next();
+}, passport.authenticate('google', { 
+  scope: ['profile', 'email'],
+  accessType: 'offline',
+  prompt: 'consent'
+}));
 
-app.get('/auth/github', passport.authenticate('github', { scope: ['user:email'] }));
+app.get('/auth/google/callback', (req, res, next) => {
+  passport.authenticate('google', (err, user, info) => {
+    if (err) {
+      console.error('Google OAuth callback error:', err);
+      return res.redirect(`/login?error=oauth_failed&message=${encodeURIComponent(err.message)}`);
+    }
+    if (!user) {
+      return res.redirect(`/login?error=oauth_failed&message=${encodeURIComponent(info?.message || 'Authentication failed')}`);
+    }
+    
+    try {
+      const token = generateToken(user);
+      res.redirect(`/?token=${token}&username=${user.username}&auth=oauth&provider=google`);
+    } catch (error) {
+      console.error('Token generation error:', error);
+      res.redirect(`/login?error=token_failed&message=${encodeURIComponent('Failed to generate authentication token')}`);
+    }
+  })(req, res, next);
+});
 
-app.get('/auth/github/callback',
-  passport.authenticate('github', { failureRedirect: '/login' }),
-  (req, res) => {
-    const token = generateToken(req.user);
-    res.redirect(`/?token=${token}&username=${req.user.username}`);
+app.get('/auth/github', (req, res, next) => {
+  if (!process.env.GITHUB_CLIENT_ID || !process.env.GITHUB_CLIENT_SECRET) {
+    return res.status(503).json({ 
+      error: 'GitHub OAuth is not configured',
+      message: 'Please contact the administrator to set up GitHub OAuth'
+    });
   }
-);
+  next();
+}, passport.authenticate('github', { 
+  scope: ['user:email'],
+  prompt: 'consent'
+}));
+
+app.get('/auth/github/callback', (req, res, next) => {
+  passport.authenticate('github', (err, user, info) => {
+    if (err) {
+      console.error('GitHub OAuth callback error:', err);
+      return res.redirect(`/login?error=oauth_failed&message=${encodeURIComponent(err.message)}`);
+    }
+    if (!user) {
+      return res.redirect(`/login?error=oauth_failed&message=${encodeURIComponent(info?.message || 'Authentication failed')}`);
+    }
+    
+    try {
+      const token = generateToken(user);
+      res.redirect(`/?token=${token}&username=${user.username}&auth=oauth&provider=github`);
+    } catch (error) {
+      console.error('Token generation error:', error);
+      res.redirect(`/login?error=token_failed&message=${encodeURIComponent('Failed to generate authentication token')}`);
+    }
+  })(req, res, next);
+});
 
 // OAuth status endpoint
 app.get('/api/auth/status', (req, res) => {
-  res.json({
-    google: !!process.env.GOOGLE_CLIENT_ID,
-    github: !!process.env.GITHUB_CLIENT_ID,
-    _links: {
-      self: { href: '/api/auth/status' },
-      login: { href: '/api/auth/login', method: 'POST' }
+  try {
+    res.json({
+      google: !!process.env.GOOGLE_CLIENT_ID,
+      github: !!process.env.GITHUB_CLIENT_ID,
+      configured: {
+        google: !!(process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET),
+        github: !!(process.env.GITHUB_CLIENT_ID && process.env.GITHUB_CLIENT_SECRET)
+      },
+      _links: {
+        self: { href: '/api/auth/status' },
+        login: { href: '/api/auth/login', method: 'POST' },
+        google: { href: '/auth/google', method: 'GET' },
+        github: { href: '/auth/github', method: 'GET' }
+      }
+    });
+  } catch (error) {
+    logError('Error checking OAuth status:', error, { endpoint: '/api/auth/status' });
+    res.status(500).json({ error: 'Failed to check OAuth status' });
+  }
+});
+
+// OAuth account management endpoints
+app.get('/api/user/oauth-accounts', authenticateToken, (req, res) => {
+  try {
+    const oauthAccounts = db.getUserOAuthAccounts(req.user.id);
+    res.json({
+      oauthAccounts: oauthAccounts.map(account => ({
+        provider: account.provider,
+        providerId: account.provider_id,
+        profileData: JSON.parse(account.profile_data || '{}'),
+        linkedAt: account.created_at
+      })),
+      _links: {
+        self: { href: '/api/user/oauth-accounts' },
+        unlink: { href: '/api/user/oauth-accounts/{provider}', method: 'DELETE' }
+      }
+    });
+  } catch (error) {
+    logError('Error fetching OAuth accounts:', error, { endpoint: '/api/user/oauth-accounts', userId: req.user.id });
+    res.status(500).json({ error: 'Failed to fetch OAuth accounts' });
+  }
+});
+
+app.delete('/api/user/oauth-accounts/:provider', authenticateToken, (req, res) => {
+  try {
+    const { provider } = req.params;
+    const validProviders = ['google', 'github'];
+    
+    if (!validProviders.includes(provider)) {
+      return res.status(400).json({ error: 'Invalid OAuth provider' });
     }
-  });
+    
+    const user = db.getUserById(req.user.id);
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+    
+    // Check if user has password auth (to prevent locking themselves out)
+    if (user.auth_type === 'oauth') {
+      const oauthAccounts = db.getUserOAuthAccounts(req.user.id);
+      if (oauthAccounts.length <= 1) {
+        return res.status(400).json({ 
+          error: 'Cannot unlink last OAuth account. Please set a password first.',
+          code: 'LAST_OAUTH_ACCOUNT'
+        });
+      }
+    }
+    
+    const result = db.unlinkOAuthAccount(req.user.id, provider);
+    
+    if (result.changes === 0) {
+      return res.status(404).json({ error: 'OAuth account not found' });
+    }
+    
+    res.json({ 
+      message: 'OAuth account unlinked successfully',
+      provider: provider
+    });
+  } catch (error) {
+    logError('Error unlinking OAuth account:', error, { 
+      endpoint: '/api/user/oauth-accounts/:provider', 
+      userId: req.user.id, 
+      provider: req.params.provider 
+    });
+    res.status(500).json({ error: 'Failed to unlink OAuth account' });
+  }
+});
+
+// Enhanced token management with OAuth support
+app.post('/api/auth/refresh', authenticateToken, (req, res) => {
+  try {
+    const user = db.getUserById(req.user.id);
+    if (!user) {
+      return res.status(401).json({ error: 'User not found' });
+    }
+    
+    // Blacklist old token
+    const authHeader = req.headers['authorization'];
+    const oldToken = authHeader && authHeader.split(' ')[1];
+    if (oldToken) {
+      tokenBlacklist.add(oldToken);
+    }
+    
+    // Generate new token
+    const newToken = generateToken(user);
+    
+    res.json({
+      token: newToken,
+      expiresIn: '24h',
+      user: {
+        id: user.id,
+        username: user.username,
+        email: user.email,
+        role: user.role,
+        authType: user.auth_type
+      }
+    });
+  } catch (error) {
+    logError('Error refreshing token:', error, { endpoint: '/api/auth/refresh', userId: req.user.id });
+    res.status(500).json({ error: 'Failed to refresh token' });
+  }
 });
 
 // Admin Dashboard API endpoints

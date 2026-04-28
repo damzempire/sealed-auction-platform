@@ -22,7 +22,8 @@ class AuctionDatabase {
         id TEXT PRIMARY KEY,
         username TEXT UNIQUE NOT NULL,
         email TEXT UNIQUE,
-        hashed_password TEXT NOT NULL,
+        hashed_password TEXT,
+        auth_type TEXT DEFAULT 'password' CHECK(auth_type IN ('password', 'oauth')),
         role TEXT DEFAULT 'user' CHECK(role IN ('user', 'admin', 'moderator')),
         failed_login_attempts INTEGER DEFAULT 0,
         last_failed_login DATETIME,
@@ -44,6 +45,24 @@ class AuctionDatabase {
         used INTEGER DEFAULT 0,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
         FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+      )
+    `);
+
+    // Create OAuth accounts table
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS oauth_accounts (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL,
+        provider TEXT NOT NULL CHECK(provider IN ('google', 'github', 'facebook', 'twitter')),
+        provider_id TEXT NOT NULL,
+        profile_data TEXT,
+        access_token TEXT,
+        refresh_token TEXT,
+        token_expires_at DATETIME,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+        UNIQUE(provider, provider_id)
       )
     `);
 
@@ -2709,6 +2728,133 @@ class AuctionDatabase {
     `);
     
     return stmt.run(...recordIds);
+  }
+
+  // OAuth operations
+  getUserByOAuthProvider(provider, providerId) {
+    const validation = this.securityLayer.validateInputs({ provider, providerId });
+    if (!validation.valid) {
+      console.warn('[SECURITY] Invalid OAuth provider data:', validation.errors);
+      return null;
+    }
+    
+    const stmt = this.securityLayer.prepare(`
+      SELECT u.*, oa.provider, oa.provider_id, oa.profile_data
+      FROM users u
+      JOIN oauth_accounts oa ON u.id = oa.user_id
+      WHERE oa.provider = ? AND oa.provider_id = ?
+    `);
+    return stmt.get(validation.sanitized.provider, validation.sanitized.providerId);
+  }
+
+  createOAuthUser(profileData) {
+    const validation = this.securityLayer.validateInputs({
+      id: crypto.randomUUID(),
+      username: profileData.username || profileData.name?.replace(/\s+/g, '').toLowerCase() || profileData.email?.split('@')[0],
+      email: profileData.email,
+      provider: profileData.provider,
+      providerId: profileData.providerId,
+      profileData: JSON.stringify(profileData)
+    });
+    
+    if (!validation.valid) {
+      throw new Error(validation.errors.join(', '));
+    }
+    
+    const sanitized = validation.sanitized;
+    
+    // Create user account
+    const userStmt = this.securityLayer.prepare(`
+      INSERT INTO users (id, username, email, hashed_password, auth_type, created_at)
+      VALUES (?, ?, ?, ?, 'oauth', CURRENT_TIMESTAMP)
+    `);
+    
+    userStmt.run(sanitized.id, sanitized.username, sanitized.email, null);
+    
+    // Create OAuth account link
+    const oauthStmt = this.securityLayer.prepare(`
+      INSERT INTO oauth_accounts (id, user_id, provider, provider_id, profile_data, created_at)
+      VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+    `);
+    
+    oauthStmt.run(crypto.randomUUID(), sanitized.id, sanitized.provider, sanitized.providerId, sanitized.profileData);
+    
+    return this.getUserById(sanitized.id);
+  }
+
+  linkOAuthAccount(userId, provider, providerId, profileData) {
+    const validation = this.securityLayer.validateInputs({
+      userId,
+      provider,
+      providerId,
+      profileData: JSON.stringify(profileData)
+    });
+    
+    if (!validation.valid) {
+      throw new Error(validation.errors.join(', '));
+    }
+    
+    const sanitized = validation.sanitized;
+    
+    const stmt = this.securityLayer.prepare(`
+      INSERT INTO oauth_accounts (id, user_id, provider, provider_id, profile_data, created_at)
+      VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+    `);
+    
+    return stmt.run(crypto.randomUUID(), sanitized.userId, sanitized.provider, sanitized.providerId, sanitized.profileData);
+  }
+
+  updateOAuthUserProfile(userId, profileData) {
+    const validation = this.securityLayer.validateInputs({
+      userId,
+      profileData: JSON.stringify(profileData)
+    });
+    
+    if (!validation.valid) {
+      throw new Error(validation.errors.join(', '));
+    }
+    
+    const sanitized = validation.sanitized;
+    
+    const stmt = this.securityLayer.prepare(`
+      UPDATE oauth_accounts 
+      SET profile_data = ?, updated_at = CURRENT_TIMESTAMP
+      WHERE user_id = ? AND provider = ?
+    `);
+    
+    return stmt.run(sanitized.profileData, sanitized.userId, profileData.provider);
+  }
+
+  getUserOAuthAccounts(userId) {
+    const validation = this.securityLayer.validateInput(userId);
+    if (!validation.valid) {
+      console.warn('[SECURITY] Invalid user ID format:', userId);
+      return [];
+    }
+    
+    const stmt = this.securityLayer.prepare(`
+      SELECT provider, provider_id, profile_data, created_at
+      FROM oauth_accounts
+      WHERE user_id = ?
+      ORDER BY created_at DESC
+    `);
+    return stmt.all(validation.sanitized);
+  }
+
+  unlinkOAuthAccount(userId, provider) {
+    const validation = this.securityLayer.validateInputs({ userId, provider });
+    if (!validation.valid) {
+      throw new Error(validation.errors.join(', '));
+    }
+    
+    const sanitized = validation.sanitized;
+    
+    const stmt = this.securityLayer.prepare(`
+      DELETE FROM oauth_accounts
+      WHERE user_id = ? AND provider = ?
+    `);
+    
+    return stmt.run(sanitized.userId, sanitized.provider);
   }
 }
 

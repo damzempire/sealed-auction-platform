@@ -1752,5 +1752,333 @@ function startOnboardingWizard() {
     }
 }
 
+// OAuth Functions
+async function checkOAuthStatus() {
+    try {
+        const response = await fetch('/api/auth/status');
+        const data = await response.json();
+        
+        // Show/hide OAuth login buttons based on configuration
+        const googleBtn = document.getElementById('googleLoginBtn');
+        const githubBtn = document.getElementById('githubLoginBtn');
+        
+        if (googleBtn) {
+            if (data.configured?.google) {
+                googleBtn.classList.remove('hidden');
+            } else {
+                googleBtn.classList.add('hidden');
+            }
+        }
+        
+        if (githubBtn) {
+            if (data.configured?.github) {
+                githubBtn.classList.remove('hidden');
+            } else {
+                githubBtn.classList.add('hidden');
+            }
+        }
+        
+        // Log OAuth status for debugging
+        console.log('OAuth Status:', data);
+    } catch (error) {
+        console.error('Error checking OAuth status:', error);
+    }
+}
+
+function checkOAuthCallback() {
+    const urlParams = new URLSearchParams(window.location.search);
+    const token = urlParams.get('token');
+    const username = urlParams.get('username');
+    const auth = urlParams.get('auth');
+    const provider = urlParams.get('provider');
+    const error = urlParams.get('error');
+    const message = urlParams.get('message');
+    
+    if (error) {
+        // Handle OAuth errors
+        const errorMessage = message || 'OAuth authentication failed';
+        showNotification(errorMessage, 'error');
+        
+        // Clean up URL
+        window.history.replaceState({}, document.title, window.location.pathname);
+        return;
+    }
+    
+    if (token && username) {
+        // Successful OAuth authentication
+        const user = {
+            id: urlParams.get('id') || username,
+            username: username,
+            token: token,
+            authType: auth || 'oauth',
+            provider: provider
+        };
+        
+        // Store user session
+        localStorage.setItem('currentUser', JSON.stringify(user));
+        currentUser = user;
+        
+        // Update UI
+        hideAuthModal();
+        updateUserDisplay();
+        checkAdminAccess();
+        
+        // Show success message
+        const providerName = provider ? provider.charAt(0).toUpperCase() + provider.slice(1) : 'OAuth';
+        showNotification(`Successfully logged in with ${providerName}!`, 'success');
+        
+        // Clean up URL
+        window.history.replaceState({}, document.title, window.location.pathname);
+        
+        // Reload auctions to refresh user-specific data
+        loadAuctions(true);
+    }
+}
+
+// OAuth Account Management
+async function loadOAuthAccounts() {
+    if (!currentUser || !currentUser.token) return;
+    
+    try {
+        const response = await fetch('/api/user/oauth-accounts', {
+            headers: {
+                'Authorization': `Bearer ${currentUser.token}`
+            }
+        });
+        
+        if (response.ok) {
+            const data = await response.json();
+            displayOAuthAccounts(data.oauthAccounts);
+        } else {
+            console.error('Failed to load OAuth accounts');
+        }
+    } catch (error) {
+        console.error('Error loading OAuth accounts:', error);
+    }
+}
+
+function displayOAuthAccounts(oauthAccounts) {
+    const container = document.getElementById('oauthAccountsContainer');
+    if (!container) return;
+    
+    if (!oauthAccounts || oauthAccounts.length === 0) {
+        container.innerHTML = '<p class="text-gray-500">No OAuth accounts linked</p>';
+        return;
+    }
+    
+    const accountsHtml = oauthAccounts.map(account => `
+        <div class="flex items-center justify-between p-3 border rounded-lg">
+            <div class="flex items-center space-x-3">
+                <div class="w-8 h-8 rounded-full bg-gradient-to-r ${getProviderColors(account.provider)} flex items-center justify-center">
+                    <span class="text-white font-bold text-sm">${account.provider.charAt(0).toUpperCase()}</span>
+                </div>
+                <div>
+                    <p class="font-medium">${account.provider.charAt(0).toUpperCase() + account.provider.slice(1)}</p>
+                    <p class="text-sm text-gray-500">Linked ${new Date(account.linkedAt).toLocaleDateString()}</p>
+                </div>
+            </div>
+            <button 
+                onclick="unlinkOAuthAccount('${account.provider}')"
+                class="text-red-600 hover:text-red-800 text-sm font-medium"
+            >
+                Unlink
+            </button>
+        </div>
+    `).join('');
+    
+    container.innerHTML = accountsHtml;
+}
+
+function getProviderColors(provider) {
+    switch (provider) {
+        case 'google': return 'from-blue-500 to-red-500';
+        case 'github': return 'from-gray-700 to-gray-900';
+        default: return 'from-blue-500 to-purple-500';
+    }
+}
+
+async function unlinkOAuthAccount(provider) {
+    if (!currentUser || !currentUser.token) return;
+    
+    if (!confirm(`Are you sure you want to unlink your ${provider} account?`)) {
+        return;
+    }
+    
+    try {
+        const response = await fetch(`/api/user/oauth-accounts/${provider}`, {
+            method: 'DELETE',
+            headers: {
+                'Authorization': `Bearer ${currentUser.token}`
+            }
+        });
+        
+        if (response.ok) {
+            showNotification(`${provider.charAt(0).toUpperCase() + provider.slice(1)} account unlinked successfully`, 'success');
+            loadOAuthAccounts(); // Refresh the list
+        } else {
+            const error = await response.json();
+            showNotification(error.error || 'Failed to unlink account', 'error');
+        }
+    } catch (error) {
+        console.error('Error unlinking OAuth account:', error);
+        showNotification('Failed to unlink account', 'error');
+    }
+}
+
+// Token Management
+async function refreshToken() {
+    if (!currentUser || !currentUser.token) return;
+    
+    try {
+        const response = await fetch('/api/auth/refresh', {
+            method: 'POST',
+            headers: {
+                'Authorization': `Bearer ${currentUser.token}`
+            }
+        });
+        
+        if (response.ok) {
+            const data = await response.json();
+            
+            // Update stored user with new token
+            currentUser.token = data.token;
+            localStorage.setItem('currentUser', JSON.stringify(currentUser));
+            
+            showNotification('Token refreshed successfully', 'success');
+        } else {
+            const error = await response.json();
+            showNotification(error.error || 'Failed to refresh token', 'error');
+            
+            // If refresh fails, log out the user
+            if (response.status === 401) {
+                logout();
+            }
+        }
+    } catch (error) {
+        console.error('Error refreshing token:', error);
+        showNotification('Failed to refresh token', 'error');
+    }
+}
+
+// User Dropdown Functions
+function toggleUserDropdown() {
+    const dropdown = document.getElementById('userDropdown');
+    if (dropdown) {
+        dropdown.classList.toggle('hidden');
+        
+        // Update dropdown user info
+        if (currentUser) {
+            const usernameEl = document.getElementById('dropdownUsername');
+            const emailEl = document.getElementById('dropdownEmail');
+            
+            if (usernameEl) {
+                usernameEl.textContent = currentUser.username || 'User';
+            }
+            if (emailEl) {
+                emailEl.textContent = currentUser.email || '';
+            }
+        }
+    }
+}
+
+function hideUserDropdown() {
+    const dropdown = document.getElementById('userDropdown');
+    if (dropdown) {
+        dropdown.classList.add('hidden');
+    }
+}
+
+// OAuth Accounts Modal Functions
+function showOAuthAccounts() {
+    const modal = document.getElementById('oauthAccountsModal');
+    if (modal) {
+        modal.classList.remove('hidden');
+        loadOAuthAccounts();
+        updateModalOAuthButtons();
+    }
+    hideUserDropdown();
+}
+
+function hideOAuthAccounts() {
+    const modal = document.getElementById('oauthAccountsModal');
+    if (modal) {
+        modal.classList.add('hidden');
+    }
+}
+
+function updateModalOAuthButtons() {
+    // Check OAuth status and show/hide modal buttons
+    fetch('/api/auth/status')
+        .then(response => response.json())
+        .then(data => {
+            const googleBtn = document.getElementById('modalGoogleLoginBtn');
+            const githubBtn = document.getElementById('modalGithubLoginBtn');
+            
+            if (googleBtn) {
+                if (data.configured?.google) {
+                    googleBtn.classList.remove('hidden');
+                } else {
+                    googleBtn.classList.add('hidden');
+                }
+            }
+            
+            if (githubBtn) {
+                if (data.configured?.github) {
+                    githubBtn.classList.remove('hidden');
+                } else {
+                    githubBtn.classList.add('hidden');
+                }
+            }
+        })
+        .catch(error => {
+            console.error('Error checking OAuth status for modal:', error);
+        });
+}
+
+// Close dropdowns when clicking outside
+document.addEventListener('click', (event) => {
+    const userDropdown = document.getElementById('userDropdown');
+    const userMenuButton = event.target.closest('button[onclick="toggleUserDropdown()"]');
+    
+    if (userDropdown && !userDropdown.contains(event.target) && !userMenuButton) {
+        hideUserDropdown();
+    }
+});
+
+// Close modals when clicking outside
+document.addEventListener('click', (event) => {
+    const oauthModal = document.getElementById('oauthAccountsModal');
+    const authModal = document.getElementById('authModal');
+    
+    if (oauthModal && !oauthModal.contains(event.target) && !event.target.closest('button[onclick="showOAuthAccounts()"]')) {
+        hideOAuthAccounts();
+    }
+});
+
+// Update user display function to include email
+function updateUserDisplay() {
+    const userMenu = document.getElementById('userMenu');
+    const usernameDisplay = document.getElementById('usernameDisplay');
+    const analyticsLink = document.getElementById('analyticsLink');
+    
+    if (currentUser) {
+        if (userMenu) userMenu.classList.remove('hidden');
+        if (usernameDisplay) usernameDisplay.textContent = currentUser.username || currentUser.email || 'User';
+        if (analyticsLink) analyticsLink.classList.remove('hidden');
+    } else {
+        if (userMenu) userMenu.classList.add('hidden');
+        if (analyticsLink) analyticsLink.classList.add('hidden');
+    }
+}
+
 // Make functions globally available
 window.startOnboardingWizard = startOnboardingWizard;
+window.checkOAuthStatus = checkOAuthStatus;
+window.checkOAuthCallback = checkOAuthCallback;
+window.loadOAuthAccounts = loadOAuthAccounts;
+window.unlinkOAuthAccount = unlinkOAuthAccount;
+window.refreshToken = refreshToken;
+window.toggleUserDropdown = toggleUserDropdown;
+window.hideUserDropdown = hideUserDropdown;
+window.showOAuthAccounts = showOAuthAccounts;
+window.hideOAuthAccounts = hideOAuthAccounts;
